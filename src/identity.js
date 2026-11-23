@@ -1,7 +1,7 @@
 /**
  * 从已安装的豆包客户端读取设备身份。
  *
- * 逆向结论（来源：dsh-plugin-doubao@woc-jpg 与 dsh-connect-doubao@Wahwayhale 的实测）：
+ * 逆向结论（来源：dsh-doubao-signin@woc-jpg 与 dsh-connect-doubao@Wahwayhale 的实测）：
  *
  * - 聊天端点的风控按「设备指纹」聚合。带着账号没见过的 device_id 发请求，
  *   无论会话多有效都吃 710022004；全新造的 id 必被拒。唯一可用的 id 是客户端

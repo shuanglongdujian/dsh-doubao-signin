@@ -75,7 +75,7 @@ async function load(config = {}) {
 describe('插件装载', () => {
   test('导出 name 与 inject', async () => {
     const mod = await import('../index.js')
-    assert.equal(mod.name, 'plugin-doubao')
+    assert.equal(mod.name, 'doubao-signin')
     assert.deepEqual(mod.inject, ['tools'])
   })
 

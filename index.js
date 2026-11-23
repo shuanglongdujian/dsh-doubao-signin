@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-doubao —— Host 半身。
+ * dsh-doubao-signin —— Host 半身。
  *
  * 三个模型面向的工具：
  * - `doubao_chat`     豆包网页反代（OpenAI 风格返回）
@@ -12,7 +12,7 @@
  * 本文件不 import 任何 `@deepseek-ai/*`：第三方插件跑在 profile 的 node_modules，
  * 那里没有核心包，只有 `ctx` 是可用的入口。
  *
- * @module dsh-plugin-doubao
+ * @module dsh-doubao-signin
  */
 import { runCheckin } from './src/checkin.js'
 import {
@@ -39,7 +39,7 @@ import { findClientIdentity, toIdentity } from './src/identity.js'
 import { registerQuotaRoute } from './src/routes.js'
 
 /** Cordis 插件名。 */
-export const name = 'plugin-doubao'
+export const name = 'doubao-signin'
 
 /** 唯一硬依赖是 tools；缺了别的只是少功能，不应该让插件挂不上。 */
 export const inject = ['tools']
@@ -608,7 +608,7 @@ export async function apply(ctx, rawConfig = {}) {
       },
       log,
     })
-    log('额度卡片路由已注册: /plugins/dsh-plugin-doubao/quota')
+    log('额度卡片路由已注册: /plugins/dsh-doubao-signin/quota')
   } else {
     log('webServer 服务不可用，额度卡片路由未注册（工具不受影响）')
   }

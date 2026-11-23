@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-doubao",
+  "name": "dsh-doubao-signin",
   "version": "0.4.0",
   "description": "豆包（Doubao）网页端反代与每日签到：复用本机客户端的登录态，把 a_bogus 签名交给客户端自己算，模型侧提供 doubao_chat，签到侧提供 doubao_checkin。",
   "type": "module",
@@ -72,9 +72,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git"
+    "url": "git+https://github.com/shuanglongdujian/dsh-doubao-signin.git"
   },
-  "homepage": "https://github.com/shuanglongdujian/dsh-plugin-doubao",
+  "homepage": "https://github.com/shuanglongdujian/dsh-doubao-signin",
   "scripts": {
     "test": "node --test",
     "mount": "node test/live-mount.mjs",

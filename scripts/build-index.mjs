@@ -143,7 +143,7 @@ const libUrl = pathToFileURL(
 ).href
 const { parseMarketIndex, marketInstallTarget, MarketIndexError } = await import(libUrl)
 
-const fakeIndexUrl = 'https://raw.githubusercontent.com/shuanglongdujian/dsh-plugin-doubao/main/market-index.json'
+const fakeIndexUrl = 'https://raw.githubusercontent.com/shuanglongdujian/dsh-doubao-signin/main/market-index.json'
 try {
   const parsed = parseMarketIndex(JSON.parse(fs.readFileSync(out, 'utf8')), fakeIndexUrl)
   const plugin = parsed.plugins[0]

@@ -18,7 +18,7 @@ const SRC = readFileSync(path.join(ROOT, 'client', 'doubao-card.js'), 'utf8')
 
 test('client bundle 是一次 ModuleLoader.load 注册（宿主契约）', () => {
   assert.ok(SRC.includes('window.__ModuleLoader__.load('), '必须自己调用 __ModuleLoader__.load')
-  assert.ok(SRC.includes("id: 'dsh-plugin-doubao'"), 'load 的 id 必须是 plugin-doubao')
+  assert.ok(SRC.includes("id: 'dsh-doubao-signin'"), 'load 的 id 必须是 plugin-doubao')
   assert.ok(SRC.includes('factory: (require)'), '必须导出 factory(require)')
 })
 
@@ -61,14 +61,14 @@ test('带 rev 自检：用虚拟 DOM 跑一遍卡片逻辑', async () => {
   vm.runInContext(SRC, context)
   const reg = sandboxWindow.__registered
   assert.ok(reg, 'load 应被调用并记录注册对象')
-  assert.equal(reg.id, 'dsh-plugin-doubao')
+  assert.equal(reg.id, 'dsh-doubao-signin')
 
   // 执行 factory 拿 exports
   const exportsObj = {}
   reg.factory(name => (name === 'react' ? ReactStub : undefined))
   void exportsObj
   // factory 内部闭包直接写 exports——上面 require 只返回 stub，exports 由 vm context 的 exports 承载
-  assert.equal(context.exports?.name, 'dsh-plugin-doubao', 'factory 应设置 exports.name')
+  assert.equal(context.exports?.name, 'dsh-doubao-signin', 'factory 应设置 exports.name')
 
   // apply 在无 slots 时不炸
   const effects = []

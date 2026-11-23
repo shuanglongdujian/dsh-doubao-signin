@@ -1,4 +1,4 @@
-# dsh-plugin-doubao
+# dsh-doubao-signin
 
 豆包（Doubao）网页模型反代 + 每日签到，打包成一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件。
 
@@ -34,7 +34,7 @@ DSH 没有"从仓库地址填一个框就装"的入口，装 git 源插件就是
 
 ```powershell
 cd "$env:USERPROFILE\.dsh\profiles\desktop"
-node "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.cjs" add git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git#v0.3.0
+node "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.cjs" add git+https://github.com/shuanglongdujian/dsh-doubao-signin.git#v0.3.0
 ```
 
 macOS / Linux：
@@ -42,13 +42,13 @@ macOS / Linux：
 ```bash
 cd ~/.dsh/profiles/desktop
 node ~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.cjs add \
-  git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git#v0.1.0
+  git+https://github.com/shuanglongdujian/dsh-doubao-signin.git#v0.1.0
 ```
 
 **CLI profile**（如果你用 `dsh web` / `dsh tui` 这类启动方式）：
 
 ```bash
-dsh plugin --profile <你的profile> add git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git#v0.1.0
+dsh plugin --profile <你的profile> add git+https://github.com/shuanglongdujian/dsh-doubao-signin.git#v0.1.0
 ```
 
 `desktop` 这个 profile 由 Electron 独占管理，`dsh plugin --profile desktop` 会拒绝，所以桌面版走上面切目录的路子。
@@ -60,10 +60,10 @@ dsh plugin --profile <你的profile> add git+https://github.com/shuanglongdujian
 装好可以用这条自查（profile 由 Electron 管理的 desktop 换成你自己的 profile 名）：
 
 ```bash
-dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
+dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 ```
 
-看到 `- id: plugin-doubao` 就成功了。
+看到 `- id: doubao-signin` 就成功了。
 
 ## 使用
 
@@ -130,7 +130,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 
 实现与安全边界：
 
-- 浏览器侧是 `client/doubao-card.js`（CJS，`dsh.client` 声明挂 `settings.section` slot）；数据来自 Host 半身的 loopback 路由 `/plugins/dsh-plugin-doubao/quota`（GET-only、同源、`no-store`、响应按允许清单构造）；
+- 浏览器侧是 `client/doubao-card.js`（CJS，`dsh.client` 声明挂 `settings.section` slot）；数据来自 Host 半身的 loopback 路由 `/plugins/dsh-doubao-signin/quota`（GET-only、同源、`no-store`、响应按允许清单构造）；
 - **豆包 cookie 永远不进页面**——卡片只跟本机 Host 说话，凭据只活在 Host 进程里；
 - 卡片只读不写：签到走 `doubao_checkin` 工具（必须由客户端真实 UI 发出，浏览器侧不碰）；
 - `webServer` 服务缺席时路由不注册，四个工具照常工作。
@@ -178,7 +178,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 | `kimi-k3` | 豆包里的 Kimi 车道 |
 | `glm-5.3` | 豆包里的 GLM 车道 |
 
-> 这些 id 对应网页端的 bot/路由参数，随豆包改版可能漂移。漂移了先跑 `doubao_status`，再来 [issue](https://github.com/shuanglongdujian/dsh-plugin-doubao/issues) 里贴一下返回。
+> 这些 id 对应网页端的 bot/路由参数，随豆包改版可能漂移。漂移了先跑 `doubao_status`，再来 [issue](https://github.com/shuanglongdujian/dsh-doubao-signin/issues) 里贴一下返回。
 
 ## 诚实边界（已知做不到/打折的事）
 

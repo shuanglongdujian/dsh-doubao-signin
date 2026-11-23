@@ -23,7 +23,7 @@ const t = (spawnSync('git', ['credential', 'fill'], {
 if (!t) throw new Error('git credential helper 没给 token')
 
 const OWNER = 'shuanglongdujian'
-const REPO = 'dsh-plugin-doubao'
+const REPO = 'dsh-doubao-signin'
 const API = 'https://api.github.com'
 
 /**
@@ -83,7 +83,7 @@ function person() {
   return { ...IDENTITY, date: new Date().toISOString() }
 }
 
-const MSG1 = 'feat: dsh-plugin-doubao v0.1.0 — Doubao web proxy + daily check-in as a self-inserting DSH bundle'
+const MSG1 = 'feat: dsh-doubao-signin v0.1.0 — Doubao web proxy + daily check-in as a self-inserting DSH bundle'
 const MSG2 = 'chore: market index pinned to plugin commit (validated with parseMarketIndex)'
 
 /**

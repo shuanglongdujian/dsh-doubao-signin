@@ -1,6 +1,6 @@
 # Submission for awesome-dsh-plugin
 #
-# Target path: data/plugins/shuanglongdujian__dsh-plugin-doubao.yml
+# Target path: data/plugins/shuanglongdujian__dsh-doubao-signin.yml
 #
 # Rules satisfied (contributing.md):
 #   R1  `url` must match the repository URL exactly (no .git suffix)      [done]
@@ -10,12 +10,12 @@
 #
 # Validation before PR: parse with any YAML parser; description uses single quotes.
 
-url: https://github.com/shuanglongdujian/dsh-plugin-doubao
-name: shuanglongdujian/dsh-plugin-doubao
+url: https://github.com/shuanglongdujian/dsh-doubao-signin
+name: shuanglongdujian/dsh-doubao-signin
 category: model
 description:
   en: 'Doubao web reverse-proxy and daily check-in for DeepSeek Harness as three agent tools: `doubao_chat` (OpenAI-shaped responses with simulated tool-call bridging), `doubao_checkin` (clicks the real daily sign-in button in the Doubao desktop client UI, 200 credits a day and 400 on Monday) and `doubao_status` (read-only health check). All signing is borrowed from the logged-in desktop client over CDP - the plugin never reimplements `a_bogus`, never stores credentials and never launches a browser. Ships refusal detection for Doubao moderation, host-injection stripping, a 32K prompt budget, turn pacing and a risk-control circuit breaker.'
   zh: '把豆包网页端反代成 DeepSeek Harness 的三个 Agent 工具：`doubao_chat`（OpenAI 形状返回，工具调用走文本桥）、`doubao_checkin`（CDP 点击豆包桌面客户端里的真实签到按钮，平日 200 额度、周一 400）与 `doubao_status`（只读体检）。签名全部借本机已登录客户端完成——不复刻 a_bogus、不存凭据、不起浏览器。内置审核拦截识别、宿主注入剥离、32K prompt 预算、轮次限速与风控熔断。'
 # icon 留空：官方要求 GitHub 托管的位图（raster），当前仓库只有 icon.svg；缺省回退作者头像。
 # 若 CI/审核要求图标，把 128x128 的 icon.svg 导出成 PNG 放进 docs/assets/icon-180.png 后补：
-# icon: https://raw.githubusercontent.com/shuanglongdujian/dsh-plugin-doubao/main/docs/assets/icon-180.png
+# icon: https://raw.githubusercontent.com/shuanglongdujian/dsh-doubao-signin/main/docs/assets/icon-180.png

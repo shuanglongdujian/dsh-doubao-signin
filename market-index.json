@@ -29,7 +29,7 @@
   },
   "plugins": [
     {
-      "name": "dsh-plugin-doubao",
+      "name": "dsh-doubao-signin",
       "title": {
         "en": "Doubao Proxy & Check-in",
         "zh": "豆包反代与每日签到"
@@ -40,9 +40,9 @@
       },
       "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4IiB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzNiODJmNiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM2ZDI4ZDkiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJ1YmJsZSIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZGJlYWZlIi8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB4PSI0IiB5PSI0IiB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgcng9IjI4IiBmaWxsPSJ1cmwoI2JnKSIvPgogIDwhLS0g5a+56K+d5rCU5rOh77ya5Y+N5Luj6IGK5aSp55qE5oSP6LGhIC0tPgogIDxwYXRoIGQ9Ik0zMCA0MGMwLTYuNiA1LjQtMTIgMTItMTJoNDRjNi42IDAgMTIgNS40IDEyIDEydjMwYzAgNi42LTUuNCAxMi0xMiAxMkg2MmwtMTYgMTR2LTE0aC00Yy02LjYgMC0xMi01LjQtMTItMTJWNDB6IiBmaWxsPSJ1cmwoI2J1YmJsZSkiLz4KICA8IS0tIOawlOazoemHjOeahOS4ieS4queCue+8mua1geW8j+i+k+WHuiAtLT4KICA8Y2lyY2xlIGN4PSI1MiIgY3k9IjU1IiByPSI1IiBmaWxsPSIjM2I4MmY2Ii8+CiAgPGNpcmNsZSBjeD0iNjgiIGN5PSI1NSIgcj0iNSIgZmlsbD0iIzZkMjhkOSIvPgogIDxjaXJjbGUgY3g9Ijg0IiBjeT0iNTUiIHI9IjUiIGZpbGw9IiMzYjgyZjYiLz4KICA8IS0tIOWPs+S4i+inkuetvuWIsOW+veeroO+8muWvueWLviAtLT4KICA8Y2lyY2xlIGN4PSI5NiIgY3k9Ijk2IiByPSIyMiIgZmlsbD0iIzE2YTM0YSIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjUiLz4KICA8cGF0aCBkPSJNODYgOTZsNyA4IDEzLTE1IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iNiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPg==",
       "author": "shuanglongdujian",
-      "homepage": "https://github.com/shuanglongdujian/dsh-plugin-doubao",
+      "homepage": "https://github.com/shuanglongdujian/dsh-doubao-signin",
       "repository": {
-        "url": "https://github.com/shuanglongdujian/dsh-plugin-doubao.git"
+        "url": "https://github.com/shuanglongdujian/dsh-doubao-signin.git"
       },
       "metadata": {
         "category": "model-proxy",
@@ -66,7 +66,7 @@
           "publishTimestamp": 1795477060,
           "source": {
             "type": "git",
-            "url": "https://github.com/shuanglongdujian/dsh-plugin-doubao.git",
+            "url": "https://github.com/shuanglongdujian/dsh-doubao-signin.git",
             "commit": "b7e62fb3810e2534b36624b2df7678ccf136dc1b"
           },
           "engines": {

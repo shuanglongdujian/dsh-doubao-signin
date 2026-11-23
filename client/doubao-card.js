@@ -11,7 +11,7 @@
  *
  * 职责（只读）：
  * - 设置页豆包卡片下渲染额度看板：剩余合计 / 套餐积分 / 活动赠送额度（签到领的那份），带重置倒计时；
- * - 数据来自 Host 半身 loopback 路由 `/plugins/dsh-plugin-doubao/quota`；
+ * - 数据来自 Host 半身 loopback 路由 `/plugins/dsh-doubao-signin/quota`；
  * - **豆包 cookie 永不进页面**——卡片只跟本机 Host 说话；
  * - 签到走 `doubao_checkin` 工具（客户端真实 UI 发出），浏览器侧不碰。
  *
@@ -19,18 +19,18 @@
  */
 
 window.__ModuleLoader__.load({
-  id: 'dsh-plugin-doubao',
+  id: 'dsh-doubao-signin',
   factory: (require) => {
     const React = require('react')
 
     /** Host 半身提供的额度路由（同源 fetch，Host 头就是监听器自己）。 */
-    const QUOTA_PATH = '/plugins/dsh-plugin-doubao/quota'
+    const QUOTA_PATH = '/plugins/dsh-doubao-signin/quota'
 
     /** 刷新间隔：额度不是高频数据，30 秒足够。 */
     const REFRESH_MS = 30_000
 
     /** 卡片在宿主 slot 里的插件标识。 */
-    const PLUGIN_ID = 'dsh-plugin-doubao'
+    const PLUGIN_ID = 'dsh-doubao-signin'
 
     /**
      * 挂载入口。宿主在 inject 的服务就绪后调用。
@@ -43,7 +43,7 @@ window.__ModuleLoader__.load({
         if (!slots || typeof slots.inject !== 'function') return
         ctx.effect(() => slots.inject('settings.section', () => DoubaoCard()), PLUGIN_ID + ': quota card')
       } catch (error) {
-        console.error('[dsh-plugin-doubao] client card failed to load (host tools unaffected):', error)
+        console.error('[dsh-doubao-signin] client card failed to load (host tools unaffected):', error)
       }
     }
 

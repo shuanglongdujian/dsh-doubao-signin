@@ -11,7 +11,7 @@
  */
 
 /** 额度路由路径（client/doubao-card.js 顶部常量与此对齐）。 */
-export const QUOTA_ROUTE_PATH = '/plugins/dsh-plugin-doubao/quota'
+export const QUOTA_ROUTE_PATH = '/plugins/dsh-doubao-signin/quota'
 
 /**
  * Host 头是否指向本机监听器。
