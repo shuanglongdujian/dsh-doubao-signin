@@ -196,7 +196,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 ## 开发与测试
 
 ```sh
-node --test              # 123 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
+node --test              # 129 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 
