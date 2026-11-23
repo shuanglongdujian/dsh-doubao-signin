@@ -585,12 +585,16 @@ export async function apply(ctx, rawConfig = {}) {
   // —— 额度卡片的数据源：loopback 路由（webServer 缺席时跳过，不影响工具） ——
   let webServer = undefined
   try {
-    webServer = ctx.get?.('webServer') ?? ctx.webServer
+    webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined
+    if (!webServer || typeof webServer.register !== 'function') {
+      try { webServer = ctx.webServer } catch { webServer = undefined }
+    }
   } catch {
     webServer = undefined
   }
-  if (webServer && typeof webServer.register === 'function') {
+  if (webServer && typeof webServer.register === 'function' && typeof ctx.effect === 'function') {
     registerQuotaRoute(ctx, {
+      webServer,
       readQuota: async () => {
         try {
           const client = await ensureSigner()

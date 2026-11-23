@@ -51,10 +51,12 @@ export function originIsLoopback(origin, localAddress) {
  * @param {{info?: Function, error?: Function}} [deps.log] - 日志。
  * @returns {void}
  */
-export function registerQuotaRoute(ctx, { readQuota, log = {} }) {
+export function registerQuotaRoute(ctx, { readQuota, log = {}, webServer }) {
   ctx.effect(() => {
+    const server = webServer ?? ctx.webServer
+    if (!server || typeof server.register !== 'function') return
     const disposers = []
-    const route = entry => disposers.push(ctx.webServer.register(entry))
+    const route = entry => disposers.push(server.register(entry))
 
     route({
       kind: 'exact',
