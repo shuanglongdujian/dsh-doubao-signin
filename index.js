@@ -34,6 +34,8 @@ import {
 } from './src/hardening.js'
 import { ClientSigner, lines } from './src/signer.js'
 import { parseQuotaSummary, renderQuota } from './src/quota.js'
+import { directChat } from './src/direct.js'
+import { findClientIdentity, toIdentity } from './src/identity.js'
 
 /** Cordis 插件名。 */
 export const name = 'plugin-doubao'
@@ -52,6 +54,10 @@ export const DEFAULTS = {
   minIntervalMs: 1500,
   /** 风控熔断冷却（毫秒）。 */
   riskCooldownMs: 10 * 60_000,
+  /** 直连优先：健康账号不碰客户端、不需要调试端口。false 强制永远走 CDP 签名桥。 */
+  directFirst: true,
+  /** 直连被风控拒绝后，本次进程内是否还允许降级到 CDP 签名桥。 */
+  allowBridgeFallback: true,
 }
 
 /** 聊天工具的参数 JSON Schema（隐式根对象，逐属性写 required）。 */
@@ -180,6 +186,19 @@ export async function apply(ctx, rawConfig = {}) {
   let signer = null
   const pacer = new Pacer({ minIntervalMs: config.minIntervalMs })
   const circuit = new Circuit({ cooldownMs: config.riskCooldownMs })
+  // 设备身份：进程内只探测一次（客户端重装会换 id，但那需要重启宿主才生效）
+  let identityCache = undefined
+
+  /**
+   * 拿设备身份（Local State 优先，leveldb 兜底）。
+   * @returns {{identity?: object, found: boolean, source?: string}} 身份或未找到。
+   */
+  const getIdentity = () => {
+    if (identityCache !== undefined) return identityCache
+    const probe = findClientIdentity()
+    identityCache = probe.found ? { found: true, identity: toIdentity(probe.info), source: probe.dir } : { found: false }
+    return identityCache
+  }
 
   /**
    * 惰性拿一个已连接的签名器。
@@ -260,7 +279,6 @@ export async function apply(ctx, rawConfig = {}) {
         body.messages[0].content = JSON.stringify({ text: budgeted.text })
       }
 
-      const client = await ensureSigner()
       const release = await pacer.begin()
       const budget = args.timeoutMs ?? config.timeoutMs
       const ac = new AbortController()
@@ -268,18 +286,68 @@ export async function apply(ctx, rawConfig = {}) {
       const onAbort = () => ac.abort(new Error('调用方取消'))
       exec?.signal?.addEventListener('abort', onAbort, { once: true })
 
-      let raw
-      try {
-        raw = await client.postChat(body, ac.signal)
-      } catch (error) {
-        const fail = classifyFailure(error.message)
+      /**
+       * 统一的失败出口：分类、熔断、清场。
+       * @param {string} message - 原始错误信息。
+       * @returns {Error} 带分类的异常。
+       */
+      const bail = message => {
+        const fail = classifyFailure(message)
         if (fail.kind === 'risk') circuit.trip()
         release()
         clearTimeout(timer)
         exec?.signal?.removeEventListener('abort', onAbort)
         const e = new Error(fail.message)
         e.kind = fail.kind
-        throw e
+        return e
+      }
+
+      // —— 路径一：无签名直连（健康账号不碰客户端）——
+      let raw = null
+      let viaDirect = false
+      if (config.directFirst) {
+        const probe = getIdentity()
+        if (probe.found) {
+          const result = await directChat({
+            body,
+            identity: probe.identity,
+            getCookie: async () => {
+              // cookie 借 CDP 从客户端页面读（客户端运行中唯一不被锁的来源）。
+              // 这里先起 signer 连接但不走签名路径。
+              const client = await ensureSigner()
+              return client.cookieHeader()
+            },
+            signal: ac.signal,
+          })
+          if (result.ok) {
+            raw = result.sse
+            viaDirect = true
+          } else if (result.kind === 'risk' || result.kind === 'auth') {
+            // 风控/未登录：直接判失败（risk 会让熔断器决定要不要降级桥）
+            if (result.kind === 'risk') circuit.trip()
+            release()
+            clearTimeout(timer)
+            exec?.signal?.removeEventListener('abort', onAbort)
+            throw new Error(
+              result.message
+              + (config.allowBridgeFallback
+                ? '。直连已被风控拦截，且签名桥同样依赖这个会话——请在豆包客户端里完成一次人机验证后再试。'
+                : ''),
+            )
+          }
+          // 其它失败（http 层）静默落进签名桥路径
+        }
+        // 身份没找到时也直接走签名桥（那边会给出指引）
+      }
+
+      // —— 路径二：CDP 签名桥（直连失败/被禁用/身份缺失时）——
+      if (raw === null) {
+        try {
+          const client = await ensureSigner()
+          raw = await client.postChat(body, ac.signal)
+        } catch (error) {
+          throw bail(error.message)
+        }
       }
 
       let unknownFrames = 0
@@ -307,7 +375,10 @@ export async function apply(ctx, rawConfig = {}) {
         throw e
       }
 
-      const notes = ['多轮历史已压平为单条 prompt；网页端没有真实会话状态']
+      const notes = [
+        viaDirect ? '本轮走直连（未触碰客户端签名）' : '本轮走 CDP 签名桥',
+        '多轮历史已压平为单条 prompt；网页端没有真实会话状态',
+      ]
       if (args.tools?.length) notes.push('工具调用为 <tool_call> 文本仿真，非上游原生通道')
       if (unknownFrames > 0) notes.push(`${unknownFrames} 个 SSE 帧未能识别，已按原样忽略（协议可能改版）`)
       if (budgeted.truncated) notes.push(`prompt 超预算，已截断（原 ${budgeted.original} 字符 → 32K 内）`)

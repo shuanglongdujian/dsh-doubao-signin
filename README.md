@@ -11,7 +11,12 @@
 | `doubao_status` | 只读体检：客户端在哪、调试端口通不通、签到卡片什么状态 |
 | `doubao_quota` | 只读额度看板：套餐积分 + 活动赠送额度（签到领的那份），带重置倒计时 |
 
-核心思路一句话：**不逆向豆包，借豆包**。签名（`a_bogus`）全部通过 CDP 在你本机已经登录的豆包桌面客户端（Electron）里现算——它的 Chromium 就是签名器，它的 cookie 就是你的会话。所以：
+核心思路一句话：**不逆向豆包，借豆包**。聊天走**双通道**：
+
+1. **直连优先（v0.3.0 起，默认开）**：健康账号不需要签名——实测 `/chat/completion` 只认 cookie + 设备指纹。插件从客户端的 `Local State` 读出它自己注册的 `device_id`（新造的 id 必被风控拒绝），带着客户端身份直连，**不碰 CDP、不需要调试端口**。客户端只要登录过一次即可，不必保持运行。
+2. **CDP 签名桥（降级路径）**：直连被风控拒绝（`710022004`）时降级到签名桥——通过 CDP 在已登录客户端页面里现算 `a_bogus`，签名由客户端自己完成。也可以用 `directFirst: false` 强制永远走这条。
+
+两个通道都意味着：
 
 - 不需要存你的密码、不需要重放登录接口；
 - 不需要复刻 `byted_acrawler.frontierSign`（那是混淆 JS，每版都在变，复刻必然腐烂）；
@@ -29,7 +34,7 @@ DSH 没有"从仓库地址填一个框就装"的入口，装 git 源插件就是
 
 ```powershell
 cd "$env:USERPROFILE\.dsh\profiles\desktop"
-node "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.cjs" add git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git#v0.1.0
+node "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.cjs" add git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git#v0.3.0
 ```
 
 macOS / Linux：
@@ -107,6 +112,18 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 | **32K prompt 预算** | 长会话压平后（百万字符级）被网关以 `common invalid param` 静默拒绝，HTTP 仍 200 | 超预算保尾截断（最后一条指令永不丢），截断了会在 notes 里说明 |
 | **限速 + 熔断** | 豆包风控对连发敏感；`710022004` 不是限流，是 shark 风控的滑块验证，重试只会加深 | 整轮持锁 + 轮间最小间隔（`minIntervalMs`，默认 1.5s）；命中风控码熔断 10 分钟（`riskCooldownMs`），冷却期内不发请求，绝不自动重试 |
 
+## 直连 vs 签名桥（v0.3.0 起）
+
+| | 直连（默认首选） | CDP 签名桥 |
+|---|---|---|
+| 触发条件 | 账号健康 + 客户端登录过一次（Local State 有 device_id） | 直连被风控拒绝、`directFirst: false`、或设备身份读不到 |
+| 是否需要客户端运行 | 否（只读它的数据文件） | 是（且需要调试端口） |
+| 签名 | 不带 `a_bogus`（健康账号不验） | 页面现算 |
+| 失败语义 | `710022004` → 熔断 + 降级指引 | 风控 → 熔断；桥断 → 可重试 |
+| 配置 | `directFirst: true`（默认） | `allowBridgeFallback: false` 可禁止降级 |
+
+设备身份读取顺序：`Local State`（`aha.device.device_id`，明文 JSON、永不锁）→ leveldb（`client_device_info` + `__tea_cache_tokens_582478` 的 web_id，前缀压缩后可能落空，只作兜底）。cookie 运行时借 CDP 从客户端页面读——客户端运行中 Cookies SQLite 被独占锁，这是唯一不被锁的来源。
+
 
 ## 第一次用必须知道的一件事：调试端口
 
@@ -168,7 +185,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 ## 开发与测试
 
 ```sh
-node --test              # 90 个离线用例（协议/签名缓存/CDP 状态机/健壮性/额度解析/工具装载/打包防呆）
+node --test              # 110 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 
@@ -183,6 +200,8 @@ index.js            Host 半身：注册四个工具
 src/protocol.js     纯逻辑：请求体构造 / SSE 解析 / 工具仿真（可离线测）
 src/hardening.js    健壮性：审核识别 / 清洗 / prompt 预算 / 限速锁 / 熔断（可离线测）
 src/quota.js        额度解析：quota/summary 窗口归一化（可离线测）
+src/direct.js      直连通道：无签名聊天 + cookie 就绪判定 + 桌面身份 query（可离线测）
+src/identity.js    设备身份：Local State / leveldb 读 device_id、fp、web_id（可离线测）
 src/signer.js       ClientSigner：CDP 借客户端算 a_bogus + 发聊天/额度请求（签名缓存 120s）
 src/checkin.js      签到状态机：找客户端 / 开端口 / 探卡片 / 点按钮
 ```
