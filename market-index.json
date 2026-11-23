@@ -1,0 +1,79 @@
+{
+  "format": 1,
+  "title": {
+    "en": "shuanglongdujian / dsh 插件",
+    "zh": "shuanglongdujian 的 dsh 插件"
+  },
+  "description": {
+    "en": "Community plugins for DeepSeek Harness, installed from GitHub.",
+    "zh": "DeepSeek Harness 社区插件，从 GitHub 直接安装。"
+  },
+  "metadata": {
+    "categories": {
+      "model-proxy": {
+        "title": {
+          "en": "Model proxy",
+          "zh": "模型反代"
+        }
+      }
+    },
+    "labels": {
+      "needs-doubao-client": {
+        "title": {
+          "en": "Requires the Doubao desktop client",
+          "zh": "需要豆包桌面客户端"
+        }
+      }
+    },
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "dsh-plugin-doubao",
+      "title": {
+        "en": "Doubao Proxy & Check-in",
+        "zh": "豆包反代与每日签到"
+      },
+      "description": {
+        "en": "Reverse-proxies the Doubao web models through your own logged-in desktop client (no password replay, no re-implemented a_bogus) and claims the daily quota check-in by clicking the real UI button. Tools: doubao_chat, doubao_checkin, doubao_status.",
+        "zh": "借本机已登录的豆包客户端反代网页模型：不存密码、不复刻 a_bogus，签名全部交给客户端自己算；每日签到走真实 UI 点击，不碰签到接口风控。提供 doubao_chat / doubao_checkin / doubao_status 三个工具。"
+      },
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4IiB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzNiODJmNiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM2ZDI4ZDkiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJ1YmJsZSIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZGJlYWZlIi8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB4PSI0IiB5PSI0IiB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgcng9IjI4IiBmaWxsPSJ1cmwoI2JnKSIvPgogIDwhLS0g5a+56K+d5rCU5rOh77ya5Y+N5Luj6IGK5aSp55qE5oSP6LGhIC0tPgogIDxwYXRoIGQ9Ik0zMCA0MGMwLTYuNiA1LjQtMTIgMTItMTJoNDRjNi42IDAgMTIgNS40IDEyIDEydjMwYzAgNi42LTUuNCAxMi0xMiAxMkg2MmwtMTYgMTR2LTE0aC00Yy02LjYgMC0xMi01LjQtMTItMTJWNDB6IiBmaWxsPSJ1cmwoI2J1YmJsZSkiLz4KICA8IS0tIOawlOazoemHjOeahOS4ieS4queCue+8mua1geW8j+i+k+WHuiAtLT4KICA8Y2lyY2xlIGN4PSI1MiIgY3k9IjU1IiByPSI1IiBmaWxsPSIjM2I4MmY2Ii8+CiAgPGNpcmNsZSBjeD0iNjgiIGN5PSI1NSIgcj0iNSIgZmlsbD0iIzZkMjhkOSIvPgogIDxjaXJjbGUgY3g9Ijg0IiBjeT0iNTUiIHI9IjUiIGZpbGw9IiMzYjgyZjYiLz4KICA8IS0tIOWPs+S4i+inkuetvuWIsOW+veeroO+8muWvueWLviAtLT4KICA8Y2lyY2xlIGN4PSI5NiIgY3k9Ijk2IiByPSIyMiIgZmlsbD0iIzE2YTM0YSIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjUiLz4KICA8cGF0aCBkPSJNODYgOTZsNyA4IDEzLTE1IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iNiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPg==",
+      "author": "shuanglongdujian",
+      "homepage": "https://github.com/shuanglongdujian/dsh-plugin-doubao",
+      "repository": {
+        "url": "https://github.com/shuanglongdujian/dsh-plugin-doubao.git"
+      },
+      "metadata": {
+        "category": "model-proxy",
+        "keywords": [
+          "dsh",
+          "dsh-plugin",
+          "doubao",
+          "豆包",
+          "checkin",
+          "签到",
+          "2api"
+        ],
+        "labels": [
+          "needs-doubao-client"
+        ],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1795429581,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/shuanglongdujian/dsh-plugin-doubao.git",
+            "commit": "f871ca202919ed794405c63446833d51908b4c0c"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.0"
+          }
+        }
+      ]
+    }
+  ]
+}
