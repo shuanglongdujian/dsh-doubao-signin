@@ -53,8 +53,8 @@ app.set('tools', toolsService)
 await mod.apply(app, CONFIG)
 
 console.log('已注册工具:', [...registered.keys()].join(', '))
-assert.equal(registered.size, 3, '应该注册三个工具')
-for (const n of ['doubao_chat', 'doubao_checkin', 'doubao_status']) {
+assert.equal(registered.size, 4, '应该注册四个工具')
+for (const n of ['doubao_chat', 'doubao_checkin', 'doubao_status', 'doubao_quota']) {
   assert.ok(registered.has(n), `缺少 ${n}`)
 }
 
@@ -119,8 +119,8 @@ await assert.rejects(
   // 完全没有 logger 服务时，挂载不崩（落回 console）
   const t = makeTools()
   await mod.apply({ tools: t.service }, CONFIG)
-  assert.equal(t.registered.size, 3)
+  assert.equal(t.registered.size, 4)
 }
 
-console.log('\n✅ 真 cordis Context 挂载通过：3 个工具、schema 合规、降级路径正常、两种 logger 形态兼容')
+console.log('\n✅ 真 cordis Context 挂载通过：4 个工具、schema 合规、降级路径正常、两种 logger 形态兼容')
 void DSH_ROOT

@@ -2,13 +2,14 @@
 
 豆包（Doubao）网页模型反代 + 每日签到，打包成一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件。
 
-装好之后模型侧多出三个工具：
+装好之后模型侧多出四个工具：
 
 | 工具 | 干什么 |
 |---|---|
 | `doubao_chat` | 向豆包网页端发一次对话，流式收完，返回文本 |
 | `doubao_checkin` | 领取「天天领额度」每日签到（平日 200，周一 400） |
 | `doubao_status` | 只读体检：客户端在哪、调试端口通不通、签到卡片什么状态 |
+| `doubao_quota` | 只读额度看板：套餐积分 + 活动赠送额度（签到领的那份），带重置倒计时 |
 
 核心思路一句话：**不逆向豆包，借豆包**。签名（`a_bogus`）全部通过 CDP 在你本机已经登录的豆包桌面客户端（Electron）里现算——它的 Chromium 就是签名器，它的 cookie 就是你的会话。所以：
 
@@ -87,6 +88,26 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 跑一下 doubao_status
 ```
 
+### 查额度
+
+```
+用 doubao_quota 看看我还有多少额度
+```
+
+返回套餐积分（豆包 2026-11 改版后的主额度）与活动赠送额度（每日签到领的那份），各带重置倒计时。只读、不消耗推理额度——借客户端 cookie 直连汇总端点，实测该端点不验 `a_bogus`。读取失败会明确说"读不出"，不会静默显示 0。
+
+## 健壮性（v0.2.0 起）
+
+聊天路径内置了四层防护，全部来自同类插件的实测逆向结论：
+
+| 防护 | 对抗什么 | 行为 |
+|---|---|---|
+| **审核拦截识别** | 豆包内容审核不返回错误码，回一段以「该内容涉嫌违反」开头的正常文本流 + stop——不识别它的话你会看到一个"突然不会说话"的模型 | 流式第一个 delta 就判定，换成明确的结构化错误（"内容审核拦截，不是模型故障"），不会重试进同一个过滤器 |
+| **宿主注入剥离** | DSH 会在 messages 里塞 `<system-reminder>`（AGENTS.md、运行模式前言，数万字符）——这些词正是触发消费者端点审核的主因 | 出网前剥掉标签；用户粘贴的长文档不受影响 |
+| **32K prompt 预算** | 长会话压平后（百万字符级）被网关以 `common invalid param` 静默拒绝，HTTP 仍 200 | 超预算保尾截断（最后一条指令永不丢），截断了会在 notes 里说明 |
+| **限速 + 熔断** | 豆包风控对连发敏感；`710022004` 不是限流，是 shark 风控的滑块验证，重试只会加深 | 整轮持锁 + 轮间最小间隔（`minIntervalMs`，默认 1.5s）；命中风控码熔断 10 分钟（`riskCooldownMs`），冷却期内不发请求，绝不自动重试 |
+
+
 ## 第一次用必须知道的一件事：调试端口
 
 豆包的 `--remote-debugging-port` **只能在启动命令行时带上**，运行中的 Electron 进程没有这个口，谁也没法事后给它开。所以：
@@ -147,20 +168,22 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 ## 开发与测试
 
 ```sh
-node --test              # 51 个离线用例（协议/签名缓存/CDP 状态机/工具装载）
+node --test              # 90 个离线用例（协议/签名缓存/CDP 状态机/健壮性/额度解析/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 
-测试不联网、不需要豆包客户端：网络层全部走注入，协议逻辑纯函数。装载测试直接从 DSH 安装目录借真实的 `assertSupportedJsonSchema` 校验器跑 schema，保证「过了测试 = 能过 loader」。
+测试不联网、不需要豆包客户端：网络层全部走注入，协议逻辑纯函数。装载测试直接从 DSH 安装目录借真实的 `assertSupportedJsonSchema` 校验器跑 schema，保证「过了测试 = 能过 loader」。`prepack` 钩子在打包前强制跑 manifest 测试（无 BOM、JSON 可解析、files 白名单文件真实存在）——防 "装完才发现坏" 的那类事故。
 
 包内 `index.js` / `src/*.js` **不 import 任何 `@deepseek-ai/*`**——第三方插件跑在 profile 的 node_modules 里，那里没有核心包，一切交互走 `ctx.tools` / `ctx.logger` 服务面。
 
 结构：
 
 ```
-index.js            Host 半身：注册三个工具
+index.js            Host 半身：注册四个工具
 src/protocol.js     纯逻辑：请求体构造 / SSE 解析 / 工具仿真（可离线测）
-src/signer.js       ClientSigner：CDP 借客户端算 a_bogus + 发聊天请求（带 120s 缓存）
+src/hardening.js    健壮性：审核识别 / 清洗 / prompt 预算 / 限速锁 / 熔断（可离线测）
+src/quota.js        额度解析：quota/summary 窗口归一化（可离线测）
+src/signer.js       ClientSigner：CDP 借客户端算 a_bogus + 发聊天/额度请求（签名缓存 120s）
 src/checkin.js      签到状态机：找客户端 / 开端口 / 探卡片 / 点按钮
 ```
 

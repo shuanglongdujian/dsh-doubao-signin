@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-doubao",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "豆包（Doubao）网页端反代与每日签到：复用本机客户端的登录态，把 a_bogus 签名交给客户端自己算，模型侧提供 doubao_chat，签到侧提供 doubao_checkin。",
   "type": "module",
   "main": "./index.js",
@@ -17,7 +17,8 @@
     "icon.svg",
     "cordis.patch.yml",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "awesome-dsh-plugin-submission.yml"
   ],
   "keywords": [
     "dsh",
@@ -68,6 +69,7 @@
   "scripts": {
     "test": "node --test",
     "mount": "node test/live-mount.mjs",
-    "index": "node scripts/build-index.mjs"
+    "index": "node scripts/build-index.mjs",
+    "prepack": "node --test test/manifest.test.js"
   }
 }

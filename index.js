@@ -23,7 +23,17 @@ import {
   parseSseLine,
   renderToolPrompt,
 } from './src/protocol.js'
+import {
+  Circuit,
+  Pacer,
+  applyPromptBudget,
+  cleanForWire,
+  classifyFailure,
+  createRefusalTracker,
+  isRefusal,
+} from './src/hardening.js'
 import { ClientSigner, lines } from './src/signer.js'
+import { parseQuotaSummary, renderQuota } from './src/quota.js'
 
 /** Cordis 插件名。 */
 export const name = 'plugin-doubao'
@@ -38,6 +48,10 @@ export const DEFAULTS = {
   exePath: '',
   defaultModel: 'doubao-pro-chat',
   timeoutMs: 180_000,
+  /** 轮间最小间隔（毫秒）。 */
+  minIntervalMs: 1500,
+  /** 风控熔断冷却（毫秒）。 */
+  riskCooldownMs: 10 * 60_000,
 }
 
 /** 聊天工具的参数 JSON Schema（隐式根对象，逐属性写 required）。 */
@@ -164,6 +178,8 @@ export async function apply(ctx, rawConfig = {}) {
   }
 
   let signer = null
+  const pacer = new Pacer({ minIntervalMs: config.minIntervalMs })
+  const circuit = new Circuit({ cooldownMs: config.riskCooldownMs })
 
   /**
    * 惰性拿一个已连接的签名器。
@@ -219,15 +235,33 @@ export async function apply(ctx, rawConfig = {}) {
       if (!MODELS[model]) {
         throw new Error(`未知模型: ${model}。可用: ${modelIds.join(', ')}`)
       }
+      if (circuit.open) {
+        throw new Error(
+          `豆包风控熔断中（剩 ${Math.ceil(circuit.remainingMs / 1000)}s）。`
+          + '在豆包客户端里完成一次人机验证后可直接重试；或等冷却结束。',
+        )
+      }
 
+      // 出网前清洗：剥宿主注入，防审核
       const messages = []
-      if (args.system) messages.push({ role: 'system', content: args.system })
-      messages.push({ role: 'user', content: args.prompt })
+      if (args.system) {
+        const cleanedSystem = cleanForWire(args.system, 'system')
+        if (cleanedSystem) messages.push({ role: 'system', content: cleanedSystem })
+      }
+      const cleanedPrompt = cleanForWire(args.prompt, 'user')
+      messages.push({ role: 'user', content: cleanedPrompt || args.prompt })
 
       const toolPrompt = args.tools?.length ? renderToolPrompt(args.tools) : ''
-      const body = buildChatBody({ model, messages, toolPrompt })
+      let body = buildChatBody({ model, messages, toolPrompt })
+
+      // 32K 预算：长会话压平后网关会静默拒
+      const budgeted = applyPromptBudget(JSON.parse(body.messages[0].content).text)
+      if (budgeted.truncated) {
+        body.messages[0].content = JSON.stringify({ text: budgeted.text })
+      }
 
       const client = await ensureSigner()
+      const release = await pacer.begin()
       const budget = args.timeoutMs ?? config.timeoutMs
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(new Error('doubao_chat 超时')), budget)
@@ -237,12 +271,19 @@ export async function apply(ctx, rawConfig = {}) {
       let raw
       try {
         raw = await client.postChat(body, ac.signal)
-      } finally {
+      } catch (error) {
+        const fail = classifyFailure(error.message)
+        if (fail.kind === 'risk') circuit.trip()
+        release()
         clearTimeout(timer)
         exec?.signal?.removeEventListener('abort', onAbort)
+        const e = new Error(fail.message)
+        e.kind = fail.kind
+        throw e
       }
 
       let unknownFrames = 0
+      const refusalTracker = createRefusalTracker()
       const { text, thinking } = await collectStream(
         (async function* stream() {
           for await (const line of lines(raw)) {
@@ -254,10 +295,22 @@ export async function apply(ctx, rawConfig = {}) {
           unknownFrames += 1
         },
       )
+      release()
+      clearTimeout(timer)
+      exec?.signal?.removeEventListener('abort', onAbort)
+
+      // 审核拦截识别：不让 canned 文案冒充模型回答
+      if (isRefusal(text)) {
+        const fail = classifyFailure(text)
+        const e = new Error(fail.message)
+        e.kind = fail.kind
+        throw e
+      }
 
       const notes = ['多轮历史已压平为单条 prompt；网页端没有真实会话状态']
       if (args.tools?.length) notes.push('工具调用为 <tool_call> 文本仿真，非上游原生通道')
       if (unknownFrames > 0) notes.push(`${unknownFrames} 个 SSE 帧未能识别，已按原样忽略（协议可能改版）`)
+      if (budgeted.truncated) notes.push(`prompt 超预算，已截断（原 ${budgeted.original} 字符 → 32K 内）`)
       if (!text) notes.push('上游返回 0 长度文本，可能是 SSE 事件结构变了；先跑 doubao_status')
 
       let finalText = text
@@ -399,5 +452,61 @@ export async function apply(ctx, rawConfig = {}) {
     },
   })
 
-  log(`已注册 doubao_chat / doubao_checkin / doubao_status（CDP ${config.cdpPort}，默认模型 ${config.defaultModel}）`)
+  // —— doubao_quota：额度看板（不消耗推理额度，只认 cookie 不验签名） ——
+  ctx.tools.register({
+    name: 'doubao_quota',
+    description:
+      '查询豆包账号剩余额度：套餐积分与活动赠送额度（签到领的那份），带重置倒计时。'
+      + '只读、不消耗推理额度；借客户端 cookie 直连汇总端点（实测不验 a_bogus）。'
+      + '读取失败返回 undefined 语义（「读不出」≠「没有」），不会静默显示 0。',
+    parameters: { type: 'object', additionalProperties: false, properties: {} },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean' },
+          total: { type: 'integer', description: '剩余额度合计。' },
+          summary: { type: 'string' },
+        },
+        required: ['ok', 'summary'],
+      },
+      render(_args, value) {
+        return [{ type: 'text', text: value.summary }]
+      },
+    },
+    timeoutMs: 30_000,
+    isConcurrencySafe: () => true,
+    presentCall() {
+      return { card: 'generic', title: '豆包额度查询', kind: 'other', rawInput: {} }
+    },
+    async execute(_args, exec) {
+      try {
+        const client = await ensureSigner()
+        const payload = await client.getQuota(exec?.signal)
+        const parsed = parseQuotaSummary(payload)
+        if (!parsed) {
+          return {
+            ok: false,
+            summary: '额度端点返回了无法解析的结构（可能协议改版）。原始片段: '
+              + JSON.stringify(payload).slice(0, 300),
+          }
+        }
+        return {
+          ok: true,
+          total: parsed.total,
+          windows: parsed.windows,
+          summary: renderQuota(parsed.windows, parsed.total),
+        }
+      } catch (error) {
+        const message = error?.message ?? String(error)
+        if (/客户端|端口|frontierSign|doubao\.com 页面/.test(message)) {
+          return { ok: false, summary: `读不了额度（${message}）。额度查询同样需要客户端在运行且 CDP 端口已开。` }
+        }
+        return { ok: false, summary: `额度查询失败: ${message}` }
+      }
+    },
+  })
+
+  log(`已注册 doubao_chat / doubao_checkin / doubao_status / doubao_quota（CDP ${config.cdpPort}，默认模型 ${config.defaultModel}）`)
 }

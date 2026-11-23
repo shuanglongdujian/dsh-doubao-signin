@@ -13,6 +13,7 @@
  */
 import { CdpClient, ensurePort, findClient, listTargets } from './checkin.js'
 import { CHAT_PATH } from './protocol.js'
+import { QUOTA_PATH } from './quota.js'
 
 /** 签名缓存时长。 */
 export const SIGN_TTL_MS = 120_000
@@ -202,6 +203,36 @@ export class ClientSigner {
       throw new Error(`上游 HTTP ${res.status}: ${text.slice(0, 300)}`)
     }
     return res.text()
+  }
+
+  /**
+   * 查额度汇总（不消耗推理额度）。
+   *
+   * 实测结论（dsh-connect-doubao，2026-11）：额度端点只认 cookie，不验 a_bogus——
+   * 故意发坏签名的请求照样 200。所以这里直接用页面 cookie 直连，不进签名缓存。
+   * @param {AbortSignal} [signal] - 取消信号。
+   * @returns {Promise<object>} 上游 JSON。
+   */
+  async getQuota(signal) {
+    const url = `https://www.doubao.com${QUOTA_PATH}?aid=497858&device_platform=web&_t=${Date.now()}`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'user-agent': UA,
+        accept: 'application/json, text/plain, */*',
+        origin: 'https://www.doubao.com',
+        referer: 'https://www.doubao.com/chat/',
+        cookie: await this.cookieHeader(),
+      },
+      body: '{}',
+      signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`额度端点 HTTP ${res.status}: ${text.slice(0, 200)}`)
+    }
+    return res.json()
   }
 
   /** 释放连接。 @returns {void} */
