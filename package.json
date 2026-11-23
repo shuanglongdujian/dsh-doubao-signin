@@ -1,0 +1,73 @@
+{
+  "name": "dsh-plugin-doubao",
+  "version": "0.1.0",
+  "description": "豆包（Doubao）网页端反代与每日签到：复用本机客户端的登录态，把 a_bogus 签名交给客户端自己算，模型侧提供 doubao_chat，签到侧提供 doubao_checkin。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "doubao",
+    "豆包",
+    "checkin",
+    "签到",
+    "2api"
+  ],
+  "author": "shuanglongdujian",
+  "engines": {
+    "dsh": ">=0.2.2-rc.0",
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml",
+      "platforms": [
+        "win32",
+        "darwin",
+        "linux"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-tools": "^0.2.2-rc.0",
+    "@deepseek-ai/schemastery": "~3.19.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shuanglongdujian/dsh-plugin-doubao.git"
+  },
+  "homepage": "https://github.com/shuanglongdujian/dsh-plugin-doubao",
+  "scripts": {
+    "test": "node --test",
+    "mount": "node test/live-mount.mjs",
+    "index": "node scripts/build-index.mjs"
+  }
+}

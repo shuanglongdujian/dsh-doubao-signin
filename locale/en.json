@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Doubao Proxy & Check-in",
+    "description": "Reverse-proxies the Doubao web models through your own logged-in desktop client (no password replay, no re-implemented a_bogus) and claims the daily quota check-in by clicking the real UI button. Tools: doubao_chat, doubao_checkin, doubao_status."
+  }
+}

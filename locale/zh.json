@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "豆包反代与每日签到",
+    "description": "借本机已登录的豆包客户端反代网页模型：不存密码、不复刻 a_bogus，签名全部交给客户端自己算；每日签到走真实 UI 点击，不碰签到接口风控。提供 doubao_chat / doubao_checkin / doubao_status 三个工具。"
+  }
+}
