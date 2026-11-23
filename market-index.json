@@ -63,11 +63,11 @@
       "versions": [
         {
           "version": "0.4.0",
-          "publishTimestamp": 1795439215,
+          "publishTimestamp": 1795477060,
           "source": {
             "type": "git",
             "url": "https://github.com/shuanglongdujian/dsh-plugin-doubao.git",
-            "commit": "78e2552e20979fbb5863795e56aa0fef0bf87436"
+            "commit": "b7e62fb3810e2534b36624b2df7678ccf136dc1b"
           },
           "engines": {
             "dsh": ">=0.2.2-rc.0"
