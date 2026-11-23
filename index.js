@@ -36,6 +36,7 @@ import { ClientSigner, lines } from './src/signer.js'
 import { parseQuotaSummary, renderQuota } from './src/quota.js'
 import { directChat } from './src/direct.js'
 import { findClientIdentity, toIdentity } from './src/identity.js'
+import { registerQuotaRoute } from './src/routes.js'
 
 /** Cordis 插件名。 */
 export const name = 'plugin-doubao'
@@ -580,4 +581,31 @@ export async function apply(ctx, rawConfig = {}) {
   })
 
   log(`已注册 doubao_chat / doubao_checkin / doubao_status / doubao_quota（CDP ${config.cdpPort}，默认模型 ${config.defaultModel}）`)
+
+  // —— 额度卡片的数据源：loopback 路由（webServer 缺席时跳过，不影响工具） ——
+  let webServer = undefined
+  try {
+    webServer = ctx.get?.('webServer') ?? ctx.webServer
+  } catch {
+    webServer = undefined
+  }
+  if (webServer && typeof webServer.register === 'function') {
+    registerQuotaRoute(ctx, {
+      readQuota: async () => {
+        try {
+          const client = await ensureSigner()
+          const payload = await client.getQuota()
+          const parsed = parseQuotaSummary(payload)
+          if (!parsed) return { ok: false, summary: '额度端点返回了无法解析的结构（协议可能改版）' }
+          return { ok: true, total: parsed.total, windows: parsed.windows, summary: renderQuota(parsed.windows, parsed.total) }
+        } catch (error) {
+          return { ok: false, summary: `读不了额度：${error.message}` }
+        }
+      },
+      log,
+    })
+    log('额度卡片路由已注册: /plugins/dsh-plugin-doubao/quota')
+  } else {
+    log('webServer 服务不可用，额度卡片路由未注册（工具不受影响）')
+  }
 }

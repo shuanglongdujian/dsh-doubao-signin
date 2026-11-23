@@ -124,6 +124,17 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 
 设备身份读取顺序：`Local State`（`aha.device.device_id`，明文 JSON、永不锁）→ leveldb（`client_device_info` + `__tea_cache_tokens_582478` 的 web_id，前缀压缩后可能落空，只作兜底）。cookie 运行时借 CDP 从客户端页面读——客户端运行中 Cookies SQLite 被独占锁，这是唯一不被锁的来源。
 
+## 额度卡片（v0.4.0 起，直接看，不用问）
+
+装完重启 DSH，设置页的豆包卡片下方会渲染一块**只读额度看板**：剩余合计、套餐积分、活动赠送额度（签到领的那份），各带重置倒计时，30 秒自动刷新——**打开页面就能看到还剩多少，不用问模型**。
+
+实现与安全边界：
+
+- 浏览器侧是 `client/doubao-card.js`（CJS，`dsh.client` 声明挂 `settings.section` slot）；数据来自 Host 半身的 loopback 路由 `/plugins/dsh-plugin-doubao/quota`（GET-only、同源、`no-store`、响应按允许清单构造）；
+- **豆包 cookie 永远不进页面**——卡片只跟本机 Host 说话，凭据只活在 Host 进程里；
+- 卡片只读不写：签到走 `doubao_checkin` 工具（必须由客户端真实 UI 发出，浏览器侧不碰）；
+- `webServer` 服务缺席时路由不注册，四个工具照常工作。
+
 
 ## 第一次用必须知道的一件事：调试端口
 
@@ -185,7 +196,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-plugin-doubao"
 ## 开发与测试
 
 ```sh
-node --test              # 110 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/工具装载/打包防呆）
+node --test              # 123 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 
