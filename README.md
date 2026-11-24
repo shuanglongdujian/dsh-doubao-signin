@@ -2,14 +2,36 @@
 
 豆包（Doubao）网页模型反代 + 每日签到，打包成一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件。
 
-装好之后模型侧多出四个工具：
+装好之后模型侧多出五个工具：
 
 | 工具 | 干什么 |
 |---|---|
+| `doubao_login` | **浏览器扫码登录**（抖音 App 扫码），把会话 cookie 存本机 —— **不需要装豆包桌面客户端** |
 | `doubao_chat` | 向豆包网页端发一次对话，流式收完，返回文本 |
 | `doubao_checkin` | 领取「天天领额度」每日签到（平日 200，周一 400） |
 | `doubao_status` | 只读体检：客户端在哪、调试端口通不通、签到卡片什么状态 |
 | `doubao_quota` | 只读额度看板：套餐积分 + 活动赠送额度（签到领的那份），带重置倒计时 |
+
+## 第一次用：扫码登录
+
+**不需要安装豆包桌面客户端。** 直接对模型说：
+
+```
+用 doubao_login 扫码登录豆包
+```
+
+它会拉起一个**独立的浏览器窗口**（Edge 或 Chrome，用的是插件自己的用户目录 `~/.dsh/doubao-signin/browser-profile`，不影响你日常浏览器），打开豆包登录页 —— 用**抖音 App**扫码（用豆包 App 扫会静默失败），扫完自动抓取会话 cookie 存到 `~/.dsh/doubao-signin/credentials.json`（权限 0600），浏览器自动关闭。
+
+浏览器目录是持久的：第二次登录通常免扫码，直接扫一次就续上了。
+
+想先看登录态而不拉浏览器：`doubao_login` 带 `dryRun: true`。
+
+**两条凭据路径**（自动择优）：
+
+| 来源 | 何时用 | 前提 |
+|---|---|---|
+| 扫码保存的凭据 | 优先 | 跑过一次 `doubao_login` |
+| 已登录的豆包桌面客户端 | 扫码凭据不存在时兜底 | 客户端装过、登录过 |
 
 核心思路一句话：**不逆向豆包，借豆包**。聊天走**双通道**：
 
@@ -196,7 +218,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 ## 开发与测试
 
 ```sh
-node --test              # 129 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
+node --test              # 144 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 
