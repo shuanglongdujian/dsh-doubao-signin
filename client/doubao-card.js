@@ -1,4 +1,12 @@
-/**
+/** 取消进行中的登录（Host 侧会关掉浏览器窗口）。 */
+      const cancelLogin = async () => {
+        setLogin({ phase: 'idle' })
+        try {
+          await fetch(LOGIN_CANCEL_PATH, { method: 'POST', headers: { accept: 'application/json' } })
+        } catch { /* 取消失败不影响后续 */ }
+      }
+
+      /**
  * dsh-doubao-signin Web 设置卡片。
  *
  * **骨架来自 dsh-connect-doubaowork（MIT）** —— 它是本机实测能正常显示的豆包系插件，
@@ -19,8 +27,6 @@ window.__ModuleLoader__.load({
     const NS_CANDIDATES = ['dsh-doubao-signin']
     const STATUS_PATH = '/plugins/dsh-doubao-signin/quota'
     const KEEPALIVE_RUN_PATH = '/plugins/dsh-doubao-signin/quota'
-    const CLI_REFRESH_PATH = '/plugins/dsh-doubao-signin/cli/refresh'
-    const SETUP_PATH = '/plugins/dsh-doubao-signin/setup'
     const CHECKIN_RUN_PATH = '/plugins/dsh-doubao-signin/checkin/run'
     const LOGIN_START_PATH = '/plugins/dsh-doubao-signin/login/start'
     const LOGIN_POLL_PATH = '/plugins/dsh-doubao-signin/login/poll'
@@ -258,12 +264,23 @@ window.__ModuleLoader__.load({
 
     const COPY = {
       zh: {
+        'action.login': "扫码登录",
+        'action.loginOk': "已登录",
+        'action.starting': "正在拉起浏览器…",
+        'action.waiting': "等待扫码",
+        'action.cancel': "取消",
+        'action.checkin': "执行每日签到",
+        'action.checking': "处理中…",
+        'action.refresh': "刷新",
+        'action.saved': "已保存",
+        'action.save': "保存",
+        'hint.saveUnsaved': "有未保存的修改",
         'nav.panel': '豆包',
         'card.title': '豆包额度',
         'card.desc': '豆包账号剩余额度：套餐积分与活动赠送额度（每日签到领的那份），只读，不消耗推理额度。',
         'tab.overview': '额度',
-        'tab.gateway': '额度',
-        'tab.models': '额度',
+        'tab.gateway': '登录',
+        'tab.models': '签到',
         'tab.accounts': '额度',
         'tab.diagnostics': '额度',
         'hint.workMode': '数据来自插件路由 /plugins/dsh-doubao-signin/quota，同源只读 fetch。',
@@ -360,6 +377,7 @@ window.__ModuleLoader__.load({
       // 扫码登录本地状态机：idle → starting → waiting → success | error
       // 只放浏览器侧的展示状态，二维码字节与 loginId 都来自 Host 的 start 响应
       const [login, setLogin] = react.useState({ phase: 'idle' })
+      const [checkinResult, setCheckinResult] = react.useState(null)
 
       const value = draft ?? config
       const dirty = draft !== null
@@ -372,6 +390,31 @@ window.__ModuleLoader__.load({
           .catch(() => { if (alive) setStatusError(true) })
         return () => { alive = false }
       }, [savedAt])
+
+      /** 千分位格式化；读不出显示 —，不显示 0。 */
+      const fmtNumber = (value) => (typeof value === 'number' ? value.toLocaleString('zh-CN') : '—')
+
+      /** 重新读一次额度。 */
+      const refreshStatus = async () => {
+        setChecking(true)
+        try {
+          const response = await fetch(STATUS_PATH, { headers: { accept: 'application/json' } })
+          const data = response.ok ? await response.json() : null
+          if (data) { setStatus(data); setStatusError(false) } else { setStatusError(true) }
+        } catch { setStatusError(true) } finally { setChecking(false) }
+      }
+
+      /** 执行一次每日签到（Host 侧走客户端真实 UI）。 */
+      const runCheckinAction = async () => {
+        setCheckingIn(true)
+        try {
+          const response = await fetch(CHECKIN_RUN_PATH, { method: 'POST', headers: { accept: 'application/json' } })
+          const data = await response.json()
+          setCheckinResult({ ok: data?.ok === true, state: data?.state ?? 'unknown', message: data?.message ?? '' })
+        } catch (error) {
+          setCheckinResult({ ok: false, state: 'error', message: String(error?.message ?? error) })
+        } finally { setCheckingIn(false) }
+      }
 
       const setField = (key, next) => setDraft(current => ({ ...(current ?? config), [key]: next }))
 
@@ -407,27 +450,6 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const refreshCli = async () => {
-        setRefreshing(true)
-        try {
-          const response = await fetch(CLI_REFRESH_PATH, { method: 'POST', headers: { accept: 'application/json' } })
-          if (response.ok) {
-            const data = await response.json()
-            setStatus(current => ({ ...(current ?? {}), cli: data }))
-            setStatusError(false)
-          }
-          // CLI 探测结果会改变「当前生效」的后端与模型清单（auto 下登录后切到 cli），
-          // 所以顺带重拉整份 status，别让那块只读测量值停在旧值。
-          const snapshot2 = await fetch(STATUS_PATH, { headers: { accept: 'application/json' } })
-          if (snapshot2.ok) {
-            setStatus(await snapshot2.json())
-            setStatusError(false)
-          }
-        } catch {} finally {
-          setRefreshing(false)
-        }
-      }
-
       /**
        * 立即签到：POST /checkin/run。Host 侧是 force 模式（忽略「今日已签」去重），
        * 所以按钮点一次就真的访问一次豆包——这也是用户手动验证登录态的手段。
@@ -449,20 +471,6 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const refreshSetup = async () => {
-        setChecking(true)
-        try {
-          const response = await fetch(SETUP_PATH, { method: 'POST', headers: { accept: 'application/json' } })
-          if (response.ok) {
-            const data = await response.json()
-            setStatus(current => ({ ...(current ?? {}), setup: data }))
-            setStatusError(false)
-          }
-        } catch {} finally {
-          setChecking(false)
-        }
-      }
-
       /**
        * 开始一次扫码登录：Host 拉起 `doubao login --qr=png` 并回 data URL。
        * 失败（未装 CLI / 已有登录在进行 / 输出不支持）都在这里落地成可读文案。
@@ -472,18 +480,25 @@ window.__ModuleLoader__.load({
         try {
           const response = await fetch(LOGIN_START_PATH, { method: 'POST', headers: { accept: 'application/json' } })
           const data = await response.json()
-          if (data?.ok === true && typeof data.imageDataUrl === 'string' && data.imageDataUrl !== '') {
-            setLogin({
-              phase: 'waiting',
-              loginId: data.loginId,
-              imageDataUrl: data.imageDataUrl,
-              expiresAt: Date.now() + Math.max(1, Number(data.expiresInSeconds ?? 300)) * 1000,
-            })
-            return
-          }
-          setLogin({ phase: 'error', error: String(data?.error ?? t('login.failed')) })
+          setLogin({ phase: 'waiting', message: data?.message ?? '' })
+          pollLogin()
         } catch (error) {
-          setLogin({ phase: 'error', error: String(error?.message ?? error) })
+          setLogin({ phase: 'error', message: String(error?.message ?? error) })
+        }
+      }
+
+      /** 轮询扫码进度：浏览器已弹出，等用户在那个窗口里扫码。 */
+      const pollLogin = async () => {
+        try {
+          const response = await fetch(LOGIN_POLL_PATH, { headers: { accept: 'application/json' } })
+          const data = await response.json()
+          const phase = data?.phase ?? 'waiting'
+          setLogin({ phase, message: data?.message ?? '' })
+          if (phase === 'waiting' || phase === 'starting') {
+            setTimeout(pollLogin, 1500)
+          }
+        } catch (error) {
+          setLogin({ phase: 'error', message: String(error?.message ?? error) })
         }
       }
 
@@ -644,291 +659,92 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsm-doubao-signin-badges' }, ...badges))
 
       /* ---- 面板一：概览（引导 + 当前生效）---- */
-      const overview = []
-      overview.push(group('g-setup', t('group.setup'), (() => {
-        const setup = status?.setup
-        if (setup === undefined || setup === null || setup.pending === true) {
-          return [h('p', { key: 'setup-pending', className: 'dsm-doubao-signin-hint' }, t('setup.pending')),
-            h('div', { key: 'setup-bar', className: 'dsm-doubao-signin-bar' },
-              button('setup-refresh', checking ? t('action.checking') : t('action.refreshSetup'), refreshSetup, 'outline', checking))]
-        }
+      const creditsPanel = []
+      creditsPanel.push(group('g-credits', t('group.gateway'), (() => {
         const items = []
-        items.push(h('div', { key: 'setup-head', className: 'dsm-doubao-signin-bar' },
-          h('span', {
-            className: `dsm-doubao-signin-badge${setup.ready === true ? ' dsm-doubao-signin-badge-ok' : ' dsm-doubao-signin-badge-warn'}`,
-          }, setup.ready === true ? t('setup.ready') : t('setup.notReady')),
-          h('div', { className: 'dsm-doubao-signin-bar-actions' },
-            button('setup-refresh', checking ? t('action.checking') : t('action.refreshSetup'), refreshSetup, 'outline', checking))))
-
-        const steps = Array.isArray(setup.steps) ? setup.steps : []
-        if (steps.length > 0) {
-          const stepNodes = []
-          for (const step of steps) {
-            const mark = step.status === 'done' ? '✓' : step.status === 'warn' ? '!' : step.status === 'blocked' ? '✗' : '○'
-            const markClass = step.status === 'done' ? 'done' : step.status === 'warn' ? 'warn' : step.status === 'blocked' ? 'blocked' : 'todo'
-            const copy = [h('span', { key: 'd', className: 'dsm-doubao-signin-step-detail' }, `${step.title}：${step.detail}`)]
-            if (step.warn) copy.push(h('span', { key: 'w', className: 'dsm-doubao-signin-warn' }, `${t('setup.warn')}${step.warn}`))
-            if (Array.isArray(step.fix) && step.fix.length > 0) {
-              copy.push(h('div', { key: 'f', className: 'dsm-doubao-signin-step-copy' },
-                h('span', { className: 'dsm-doubao-signin-hint' }, t('setup.fix')),
-                h('pre', { className: 'dsm-doubao-signin-code' }, step.fix.join('\n'))))
+        const win = status?.windows
+        if (status?.ok === true) {
+          items.push(h('div', { key: 'total', className: 'dsm-doubao-signin-bar' },
+            h('span', { className: 'dsm-doubao-signin-badge dsm-doubao-signin-badge-ok' }, t('total') + ' ' + fmtNumber(status.total)),
+            h('div', { className: 'dsm-doubao-signin-bar-actions' },
+              button('credits-refresh', checking ? t('action.checking') : t('action.refresh'), refreshStatus, 'outline', checking))))
+          const windows = Array.isArray(win) ? win : []
+          if (windows.length > 0) {
+            const rows = []
+            for (const w of windows) {
+              const parts = [w.name + '：' + fmtNumber(w.remaining) + ' / ' + fmtNumber(w.total) + '（已用 ' + w.usedPercent + '%）']
+              if (w.resetsAt && w.resetsAt > Date.now()) {
+                const mins = Math.round((w.resetsAt - Date.now()) / 60000)
+                parts.push(mins >= 1440 ? '重置 ' + Math.round(mins / 1440) + ' 天后' : mins >= 60 ? '重置 ' + Math.round(mins / 60) + ' 小时后' : '重置 ' + mins + ' 分钟后')
+              }
+              rows.push(h('div', { key: w.name, className: 'dsm-doubao-signin-note' }, parts.join(' · ')))
             }
-            stepNodes.push(h('li', { key: `step-${step.id}`, className: 'dsm-doubao-signin-step' },
-              h('span', { className: `dsm-doubao-signin-step-mark dsm-doubao-signin-step-mark-${markClass}` }, mark),
-              h('div', { className: 'dsm-doubao-signin-step-copy' }, ...copy)))
+            items.push(h('div', { key: 'windows', className: 'dsm-doubao-signin-section' }, ...rows))
           }
-          items.push(h('ul', { key: 'steps', className: 'dsm-doubao-signin-steps' }, ...stepNodes))
+          if (status?.source) {
+            items.push(h('p', { key: 'source', className: 'dsm-doubao-signin-hint' },
+              status.source === 'saved' ? t('source.saved') : t('source.client')))
+          }
+        } else {
+          items.push(h('p', { key: 'unreadable', className: 'dsm-doubao-signin-hint' },
+            statusError ? t('unavailable') + '。' + t('clientMissing') : (status?.summary || t('signedOut'))))
+          items.push(h('div', { key: 'credits-bar', className: 'dsm-doubao-signin-bar' },
+            button('credits-refresh', checking ? t('action.checking') : t('action.refresh'), refreshStatus, 'outline', checking)))
         }
         return items
       })()))
+      creditsPanel.push(group('g-credits-note', t('card.desc'), (() => [
+        h('p', { key: 'note', className: 'dsm-doubao-signin-hint' }, t('hint.keepaliveEnabled')),
+      ])()))
 
-      const effectiveNodes = []
-      if (status === null || status === undefined) {
-        effectiveNodes.push(h('p', { key: 'eff-unknown', className: 'dsm-doubao-signin-hint' }, statusError ? t('error.fetch') : t('cli.unknown')))
-      } else {
-        const liveModels = Array.isArray(status.models) ? status.models : []
-        effectiveNodes.push(kv('eff-1', t('effective.backend'), t(`effective.backend.${effectiveBackend}`)))
-        effectiveNodes.push(kv('eff-2', t('effective.models'),
-          liveModels.length === 0 ? t('effective.noModels') : `${liveModels.length}：${liveModels.join(', ')}`, true))
-        effectiveNodes.push(kv('eff-3', t('effective.default'), String(status.defaultModel ?? '')))
-      }
-      overview.push(group('g-effective', t('group.effective'), effectiveNodes))
-
-      /* ---- 面板二：网关（可编辑配置 + 保存）---- */
-      const gateway = []
-      if (settingsScope !== undefined) {
-        const rows = []
-        rows.push(field('f1', t('field.conversationMode'), select([
-          ['single', t('field.conversationMode.single')],
-          ['per-chat', t('field.conversationMode.per-chat')],
-        ], value.conversationMode ?? 'single', next => setField('conversationMode', next))))
-        rows.push(field('f2', t('field.reasoningEffort'), select(
-          ['0', '1', '2', '3', '4'].map(level => [level, level]),
-          String(value.reasoningEffort ?? '4'), next => setField('reasoningEffort', next))))
-        rows.push(field('f3', t('field.timeoutSeconds'), input('number', value.timeoutSeconds ?? 300, next => setField('timeoutSeconds', next))))
-        gateway.push(h('div', { key: 'gw-fields', className: 'dsm-doubao-signin-fields' }, ...rows))
-
-        const switches = []
-        switches.push(switchRow('s1', t('field.workMode'), t('hint.workMode'),
-          value.workMode !== false, next => setField('workMode', next)))
-        switches.push(switchRow('s2', t('field.flattenHistory'), t('hint.flattenHistory'),
-          value.flattenHistory !== false, next => setField('flattenHistory', next)))
-        switches.push(switchRow('s3', t('field.poolEnabled'), t('hint.poolEnabled'),
-          value.poolEnabled === true, next => setField('poolEnabled', next)))
-        switches.push(switchRow('s4', t('field.keepaliveEnabled'), t('hint.keepaliveEnabled'),
-          value.keepaliveEnabled === true, next => setField('keepaliveEnabled', next)))
-        gateway.push(h('div', { key: 'gw-switches', className: 'dsm-doubao-signin-switchlist' }, ...switches))
-      } else {
-        gateway.push(note('gw-ro', t('accounts.readonly')))
-      }
-
-      /* ---- 面板三：模型（后端选择 + CLI 探测）---- */
-      const modelsPanel = []
-      if (settingsScope !== undefined) {
-        const rows = []
-        rows.push(field('b1', t('field.backend'), select([
-          ['auto', t('field.backend.auto')],
-          ['cli', t('field.backend.cli')],
-          ['http', t('field.backend.http')],
-        ], value.backend ?? 'auto', next => setField('backend', next))))
-        rows.push(field('b2', t('field.cliPath'), input('text', value.cliPath ?? '', next => setField('cliPath', next), 'doubao')))
-        rows.push(field('b3', t('field.cliWorkspace'), input('text', value.cliWorkspace ?? '', next => setField('cliWorkspace', next), '~')))
-        rows.push(field('b4', t('field.cliPermissionMode'), select([
-          ['ask_risky', t('field.cliPermissionMode.ask_risky')],
-          ['ask_always', t('field.cliPermissionMode.ask_always')],
-          ['always_allow', t('field.cliPermissionMode.always_allow')],
-        ], value.cliPermissionMode ?? 'ask_risky', next => setField('cliPermissionMode', next))))
-        rows.push(field('b5', t('field.cliEffort'), select(
-          [['', t('field.cliEffort.default')], ['none', 'none'], ['minimal', 'minimal'], ['low', 'low'],
-            ['medium', 'medium'], ['high', 'high'], ['xhigh', 'xhigh'], ['max', 'max']],
-          value.cliEffort ?? '', next => setField('cliEffort', next))))
-        // 「上游后端」是一组互相影响的字段（选 cli 才用得到 cliPath/cliPermissionMode），
-        // 所以整组包在同一个分组标题下，而不是散落在面板里。
-        modelsPanel.push(group('md-backend', t('group.backend'), [
-          h('div', { key: 'md-fields', className: 'dsm-doubao-signin-fields' }, ...rows),
-          hint('md-hint', t('hint.backend')),
-        ]))
-      } else {
-        modelsPanel.push(note('md-ro', t('accounts.readonly')))
-      }
-
-      const cliNodes = []
-      if (cliInfo === null || cliInfo === undefined) {
-        cliNodes.push(h('p', { key: 'cli-unknown', className: 'dsm-doubao-signin-hint' }, statusError ? t('error.fetch') : t('cli.unknown')))
-      } else {
-        cliNodes.push(kv('cli-1', t('cli.installed'),
-          cliInfo.installed === true ? `✓ ${cliInfo.version === '' || cliInfo.version === undefined ? '' : `v${cliInfo.version}`}`.trim() : t('cli.notInstalled')))
-        cliNodes.push(kv('cli-2', t('cli.loggedIn'),
-          cliInfo.loggedIn === true ? `✓ ${t('cli.loggedIn')}` : t('cli.notLoggedIn')))
-        const cliModels = Array.isArray(cliInfo.models) ? cliInfo.models : []
-        cliNodes.push(kv('cli-3', t('cli.models'),
-          cliModels.length === 0 ? t('cli.noModels') : `${cliModels.length}：${cliModels.join(', ')}`, true))
-      }
-      cliNodes.push(h('div', { key: 'cli-bar', className: 'dsm-doubao-signin-bar' },
-        h('div', { className: 'dsm-doubao-signin-bar-actions' },
-          button('cli-refresh', refreshing ? t('action.refreshing') : t('action.refreshCli'), refreshCli, 'outline', refreshing))))
-      modelsPanel.push(group('md-cli', t('group.cli'), cliNodes))
-
-      /* ---- 面板四：账号（池 + 扫码登录 + 签到）---- */
-      const accountsPanel = []
-
-      // 扫码登录：只在 Host 提供了 login 能力时渲染（缺席给会失败的按钮更糟）
-      const loginState = status?.login
-      if (loginState !== null && loginState !== undefined) {
-        const loggedIn = cliInfo?.loggedIn === true
-        const loginNodes = [h('p', { key: 'login-desc', className: 'dsm-doubao-signin-group-desc' }, t('login.desc'))]
-        if (login.phase === 'waiting') {
-          const left = Math.max(0, Math.ceil(((login.expiresAt ?? 0) - Date.now()) / 1000))
-          loginNodes.push(h('div', { key: 'qr', className: 'dsm-doubao-signin-qr' },
-            h('img', {
-              className: 'dsm-doubao-signin-qr-img',
-              src: login.imageDataUrl,
-              alt: t('login.waiting').replace('%s', ''),
-              width: 220,
-              height: 220,
-            }),
-            h('p', { className: 'dsm-doubao-signin-qr-wait' }, t('login.waiting').replace('%s', String(left)))))
-          loginNodes.push(h('div', { key: 'qr-bar', className: 'dsm-doubao-signin-bar' },
+      const loginPanel = []
+      loginPanel.push(group('g-login', t('tab.gateway'), (() => {
+        const items = []
+        const phase = login?.phase ?? 'idle'
+        if (phase === 'idle') {
+          items.push(h('p', { key: 'login-idle', className: 'dsm-doubao-signin-hint' }, t('signedOut')))
+          items.push(h('div', { key: 'login-bar', className: 'dsm-doubao-signin-bar' },
+            button('login-start', t('action.login'), startLogin, 'primary')))
+        } else if (phase === 'starting' || phase === 'waiting') {
+          items.push(h('div', { key: 'login-wait', className: 'dsm-doubao-signin-bar' },
+            h('span', { className: 'dsm-doubao-signin-badge' }, phase === 'starting' ? t('action.starting') : t('action.waiting')),
             h('div', { className: 'dsm-doubao-signin-bar-actions' },
-              button('qr-cancel', t('login.cancel'), () => { void cancelLogin() }, 'outline'))))
-        } else if (login.phase === 'starting') {
-          loginNodes.push(h('p', { key: 'qr-starting', className: 'dsm-doubao-signin-hint' }, t('login.starting')))
-        } else if (login.phase === 'success') {
-          loginNodes.push(h('div', { key: 'qr-ok', className: 'dsm-doubao-signin-bar' },
-            h('span', { className: 'dsm-doubao-signin-badge dsm-doubao-signin-badge-ok' }, `✓ ${t('login.success')}`),
-            h('div', { className: 'dsm-doubao-signin-bar-actions' },
-              button('qr-again', t('action.loginAgain'), () => { void startLogin() }, 'outline'))))
+              button('login-cancel', t('action.cancel'), cancelLogin, 'outline'))))
+          items.push(h('p', { key: 'login-msg', className: 'dsm-doubao-signin-hint' }, login?.message ?? ''))
+        } else if (phase === 'success') {
+          items.push(h('div', { key: 'login-ok', className: 'dsm-doubao-signin-bar' },
+            h('span', { className: 'dsm-doubao-signin-badge dsm-doubao-signin-badge-ok' }, t('action.loginOk'))))
+          items.push(h('p', { key: 'login-msg', className: 'dsm-doubao-signin-hint' }, login?.message ?? ''))
         } else {
-          if (login.phase === 'error') {
-            loginNodes.push(h('p', { key: 'qr-err', className: 'dsm-doubao-signin-error' }, `${t('login.failed')}：${login.error}`))
-          }
-          loginNodes.push(h('div', { key: 'qr-bar', className: 'dsm-doubao-signin-bar' },
-            h('span', { className: 'dsm-doubao-signin-bar-status' },
-              loggedIn ? `${t('login.loggedIn')}（${t('action.loginAgain')}）` : t('login.notLoggedIn')),
-            h('div', { className: 'dsm-doubao-signin-bar-actions' },
-              button('qr-start', loggedIn ? t('action.loginAgain') : t('action.login'), () => { void startLogin() }, 'primary'))))
+          items.push(h('p', { key: 'login-err', className: 'dsm-doubao-signin-error' }, login?.message ?? t('unavailable')))
+          items.push(h('div', { key: 'login-bar', className: 'dsm-doubao-signin-bar' },
+            button('login-retry', t('action.login'), startLogin, 'primary')))
         }
-        accountsPanel.push(group('g-login', t('group.login'), loginNodes))
-      }
+        return items
+      })()))
+      loginPanel.push(group('g-login-note', t('hint.backend'), (() => [
+        h('p', { key: 'note', className: 'dsm-doubao-signin-hint' }, t('field.backend.single')),
+      ])()))
 
-      // 账号池健康
-      const poolNodes = []
-      const list = Array.isArray(status?.accounts) ? status.accounts : []
-      if (list.length === 0) {
-        poolNodes.push(h('p', { key: 'pool-empty', className: 'dsm-doubao-signin-hint' }, statusError ? t('error.fetch') : t('accounts.empty')))
-      } else {
-        const rows = []
-        for (const account of list) {
-          const health = account.health === null || account.health === undefined
-            ? t('accounts.health.unknown')
-            : account.health.ok === true ? t('accounts.health.ok') : `${t('accounts.health.bad')} (HTTP ${account.health.status})`
-          const dotClass = account.health === null || account.health === undefined
-            ? '' : account.health.ok === true ? ' dsm-doubao-signin-dot-ok' : ' dsm-doubao-signin-dot-bad'
-          rows.push(h('li', { key: `acct-${account.id}`, className: 'dsm-doubao-signin-table-row' },
-            h('span', { className: `dsm-doubao-signin-dot${dotClass}` }),
-            h('span', { className: 'dsm-doubao-signin-table-name' }, `${account.label} (${account.id})`),
-            h('span', { className: 'dsm-doubao-signin-table-meta' }, `${account.enabled ? '' : '· '}${health}`)))
+      const checkinPanel = []
+      checkinPanel.push(group('g-checkin', t('tab.models'), (() => {
+        const items = []
+        const ck = checkinResult
+        if (ck) {
+          items.push(h('div', { key: 'checkin-result', className: 'dsm-doubao-signin-bar' },
+            h('span', { className: 'dsm-doubao-signin-badge' + (ck.ok ? ' dsm-doubao-signin-badge-ok' : '') }, '[' + (ck.state ?? 'unknown') + ']'),
+            h('span', { className: 'dsm-doubao-signin-note' }, ck.message ?? '')))
         }
-        poolNodes.push(h('ul', { key: 'pool-table', className: 'dsm-doubao-signin-table' }, ...rows))
-        const lastRun = status?.lastRun ? new Date(status.lastRun).toLocaleString() : t('accounts.never')
-        poolNodes.push(kv('pool-last', t('accounts.lastRun'), lastRun))
-      }
-      poolNodes.push(h('div', { key: 'pool-bar', className: 'dsm-doubao-signin-bar' },
-        h('div', { className: 'dsm-doubao-signin-bar-actions' },
-          button('pool-probe', probing ? t('action.checking') : t('action.checkNow'), probeNow, 'outline', probing))))
-      accountsPanel.push(group('g-accounts', t('group.accounts'), poolNodes))
+        items.push(h('div', { key: 'checkin-bar', className: 'dsm-doubao-signin-bar' },
+          button('checkin-run', checkingIn ? t('action.checking') : t('action.checkin'), runCheckinAction, 'primary', checkingIn)))
+        items.push(h('p', { key: 'checkin-note', className: 'dsm-doubao-signin-hint' }, t('field.keepaliveEnabled.true')))
+        return items
+      })()))
 
-      // 每日自动签到
-      const checkinNodes = []
-      if (settingsScope !== undefined) {
-        checkinNodes.push(h('div', { key: 'ck-fields', className: 'dsm-doubao-signin-fields' },
-          field('ck1', t('checkin.enabled'), select([
-            ['off', t('checkin.enabled.off')],
-            ['on', t('checkin.enabled.on')],
-          ], value.checkinEnabled === true ? 'on' : 'off', next => setField('checkinEnabled', next === 'on'))),
-          field('ck2', t('checkin.time'), h('input', {
-            className: 'dsm-doubao-signin-input',
-            type: 'time',
-            value: `${String(value.checkinHour ?? 8).padStart(2, '0')}:${String(value.checkinMinute ?? 10).padStart(2, '0')}`,
-            onChange: event => {
-              const [hour, minute] = String(event.target.value ?? '').split(':')
-              const h2 = Number(hour)
-              const m2 = Number(minute)
-              if (Number.isInteger(h2) && h2 >= 0 && h2 <= 23) setField('checkinHour', h2)
-              if (Number.isInteger(m2) && m2 >= 0 && m2 <= 59) setField('checkinMinute', m2)
-            },
-          }))))
-      }
-
-      const checkin = status?.checkin
-      if (status === null || status === undefined) {
-        checkinNodes.push(h('p', { key: 'ck-unknown', className: 'dsm-doubao-signin-hint' }, statusError ? t('error.fetch') : t('cli.unknown')))
-      } else if (checkin === undefined || checkin === null) {
-        checkinNodes.push(h('p', { key: 'ck-unknown', className: 'dsm-doubao-signin-hint' }, t('cli.unknown')))
-      } else {
-        checkinNodes.push(kv('ck3', t('checkin.next'),
-          typeof checkin.nextRunAt === 'string' && checkin.nextRunAt !== ''
-            ? new Date(checkin.nextRunAt).toLocaleString()
-            : t('checkin.next.none')))
-        checkinNodes.push(kv('ck4', t('checkin.last'),
-          typeof checkin.lastRun === 'string' && checkin.lastRun !== ''
-            ? `${new Date(checkin.lastRun).toLocaleString()}${checkin.lastDay ? `（${checkin.lastDay}）` : ''}`
-            : t('checkin.last.none')))
-        checkinNodes.push(kv('ck5', t('checkin.result'),
-          `${t('checkin.result.value').replace('%s', String(checkin.signedCount ?? 0))}${Number(checkin.skipped ?? 0) > 0 ? `，${t('checkin.result.skipped').replace('%s', String(checkin.skipped))}` : ''}`))
-        const perAccount = Array.isArray(checkin.accounts) ? checkin.accounts : []
-        if (perAccount.length > 0) {
-          const rows = []
-          for (const entry of perAccount) {
-            const state = entry.ok === true
-              ? t('checkin.account.ok')
-              : entry.ok === false
-                ? `${t('checkin.account.fail')}${entry.code !== null && entry.code !== undefined && entry.code !== 0 ? `（业务码 ${entry.code}）` : ''}`
-                : t('checkin.account.pending')
-            const dotClass = entry.ok === true ? ' dsm-doubao-signin-dot-ok' : entry.ok === false ? ' dsm-doubao-signin-dot-bad' : ''
-            rows.push(h('li', { key: `ck-${entry.id}`, className: 'dsm-doubao-signin-table-row' },
-              h('span', { className: `dsm-doubao-signin-dot${dotClass}` }),
-              h('span', { className: 'dsm-doubao-signin-table-name' }, `${entry.id}：${state}`),
-              h('span', { className: 'dsm-doubao-signin-table-meta' }, entry.day ? String(entry.day) : '')))
-          }
-          checkinNodes.push(h('ul', { key: 'ck-table', className: 'dsm-doubao-signin-table' }, ...rows))
-        }
-        checkinNodes.push(h('div', { key: 'ck-bar', className: 'dsm-doubao-signin-bar' },
-          h('div', { className: 'dsm-doubao-signin-bar-actions' },
-            button('ck-run', checkingIn ? t('action.checkingIn') : t('action.checkin'), checkinNow, 'outline', checkingIn))))
-        checkinNodes.push(h('p', { key: 'ck-hint', className: 'dsm-doubao-signin-hint' }, t('checkin.hint')))
-      }
-      accountsPanel.push(group('g-checkin', t('group.checkin'), checkinNodes))
-
-      /* ---- 面板五：诊断（留痕 + 说明）---- */
-      const diagnostics = []
-      const traceNodes = []
-      if (status === null || status === undefined) {
-        traceNodes.push(h('p', { key: 'trace-unknown', className: 'dsm-doubao-signin-hint' }, statusError ? t('error.fetch') : t('cli.unknown')))
-      } else {
-        const mode = String(status.conversationMode ?? 'single') === 'per-chat' ? 'perChat' : 'single'
-        const bound = Number(status.conversations?.count ?? 0)
-        const persisted = status.conversations?.persisted === true
-        traceNodes.push(kv('trace-1', t('trace.mode'), t(`trace.mode.${mode}`), true))
-        traceNodes.push(kv('trace-2', t('trace.bound'), t('trace.bound.value').replace('%s', String(bound))))
-        traceNodes.push(kv('trace-3', t('trace.persisted'),
-          persisted ? t('trace.persisted.yes').replace('%s', String(status.conversations?.file ?? '')) : t('trace.persisted.no'), true))
-        traceNodes.push(h('p', { key: 'trace-hint', className: 'dsm-doubao-signin-hint' }, t('trace.hint')))
-      }
-      diagnostics.push(group('g-trace', t('group.trace'), traceNodes))
-
-      diagnostics.push(group('g-hints', t('group.hint'), [
-        h('p', { key: 'hint-cli', className: 'dsm-doubao-signin-hint' }, t('hint.cli')),
-        h('p', { key: 'hint-keepalive', className: 'dsm-doubao-signin-hint' }, t('hint.keepalive')),
-      ]))
-
-      /* ---- tab 栏 + 面板 + 底部保存条 ---- */
       const tabs = [
-        ['overview', t('tab.overview')],
-        ['gateway', t('tab.gateway')],
-        ['models', t('tab.models')],
-        ['accounts', t('tab.accounts')],
-        ['diagnostics', t('tab.diagnostics')],
+        ['credits', t('tab.overview')],
+        ['login', t('tab.gateway')],
+        ['checkin', t('tab.models')],
       ]
       const tabBar = h('div', { key: 'tabs', className: 'dsm-doubao-signin-panels', role: 'tablist' },
         ...tabs.map(([id, label]) => h('button', {
@@ -948,11 +764,9 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsm-doubao-signin-card' },
         header,
         tabBar,
-        panel('overview', overview),
-        panel('gateway', gateway),
-        panel('models', modelsPanel),
-        panel('accounts', accountsPanel),
-        panel('diagnostics', diagnostics),
+        panel('credits', creditsPanel),
+        panel('login', loginPanel),
+        panel('checkin', checkinPanel),
         saveBar)
     }
 
