@@ -110,9 +110,25 @@ test('clearCredentials 删掉凭据，不删浏览器目录', () => {
   })
 })
 
-test('findBrowser：win32 找不到时返回 undefined（不抛）', () => {
-  const r = findBrowser({ __fake: '1' }, 'win32')
-  assert.equal(r, undefined)
+test('findBrowser：win32 找到 Edge/Chrome（用真实环境变量）', () => {
+  const r = findBrowser(process.env, 'win32')
+  if (process.platform === 'win32') {
+    assert.ok(r, 'Windows 上应能发现 Edge 或 Chrome')
+    assert.ok(existsSync(r), `发现的浏览器路径应存在: ${r}`)
+  } else {
+    assert.equal(r, undefined)
+  }
+})
+
+test('findBrowser：环境变量缺失时靠兜底路径仍能找到 Edge/Chrome', () => {
+  // 空 env：roots 全空，只剩直查兜底路径能命中
+  const r = findBrowser({}, 'win32')
+  if (process.platform === 'win32') {
+    assert.ok(r, '兜底路径应能命中已安装的浏览器')
+    assert.ok(existsSync(r), `发现的浏览器路径应存在: ${r}`)
+  } else {
+    assert.equal(r, undefined)
+  }
 })
 
 test('findBrowser：linux 候选路径不存在时返回 undefined', () => {

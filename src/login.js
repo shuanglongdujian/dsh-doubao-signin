@@ -120,6 +120,7 @@ export function cookieHeaderOf(cookies) {
  */
 export function findBrowser(env = process.env, platform = process.platform) {
   if (platform === 'win32') {
+    // 键名带括号，必须用方括号取；'ProgramFiles(x86)' 和 'ProgramFiles' 都要试
     const roots = [
       env['ProgramFiles(x86)'], env.ProgramFiles, env.LOCALAPPDATA,
     ].filter(Boolean)
@@ -133,6 +134,15 @@ export function findBrowser(env = process.env, platform = process.platform) {
         const p = join(root, ...rel)
         if (existsSync(p)) return p
       }
+    }
+    // 直查常见安装位置（环境变量缺失或装在别处时兜底）
+    for (const p of [
+      'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+      'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+      'C:/Program Files/Google/Chrome/Application/chrome.exe',
+      'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    ]) {
+      if (existsSync(p)) return p
     }
     return undefined
   }
