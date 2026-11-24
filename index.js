@@ -703,89 +703,97 @@ export async function apply(ctx, rawConfig = {}) {
 
   log(`已注册 doubao_chat / doubao_checkin / doubao_status / doubao_quota（CDP ${config.cdpPort}，默认模型 ${config.defaultModel}）`)
 
-  // —— 额度卡片的数据源：loopback 路由（webServer 缺席时跳过，不影响工具） ——
-  let webServer = undefined
-  try {
-    webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined
-    if (!webServer || typeof webServer.register !== 'function') {
-      try { webServer = ctx.webServer } catch { webServer = undefined }
-    }
-  } catch {
-    webServer = undefined
-  }
-  if (webServer && typeof webServer.register === 'function' && typeof ctx.effect === 'function') {
-    // —— 扫码登录状态机（卡片轮询用）——
-    let loginTask = null
-    let loginState = { phase: 'idle' }
+  // —— 卡片数据源：loopback 路由 ——
+  // 关键：webServer 在插件 apply 时还没就绪（our-free-model 源码里明确记录过
+  // ctx.get('webServer') 在真实 web 组合里返回 undefined，路由永远注册不上的坑）。
+  // 必须用 ctx.inject(['webServer'], scoped => …) 等服务就绪后再注册。
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], scoped => {
+      const server = scoped.webServer
+      if (!server || typeof server.register !== 'function') return
+      // —— 扫码登录状态机（卡片轮询用）——
+      let loginTask = null
+      let loginState = { phase: 'idle' }
 
-    registerQuotaRoute(ctx, {
-      webServer,
-      readQuota: async () => {
-        try {
-          const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
-          if (!cookie.header) {
-            return { ok: false, summary: '尚未登录。用 doubao_login 扫码登录一次即可看到额度。' }
+      registerQuotaRoute(ctx, {
+        webServer,
+        readQuota: async () => {
+          try {
+            const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
+            if (!cookie.header) {
+              return { ok: false, summary: '尚未登录。用 doubao_login 扫码登录一次即可看到额度。' }
+            }
+            const probe = getIdentity()
+            const query = probe.found
+              ? buildDirectQuery(probe.identity)
+              : `aid=582478&device_platform=web&_t=${Date.now()}`
+            const res = await fetch(`https://www.doubao.com${QUOTA_PATH}?${query}`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                accept: 'application/json, text/plain, */*',
+                origin: 'https://www.doubao.com',
+                referer: 'https://www.doubao.com/chat/',
+                cookie: cookie.header,
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+              },
+              body: '{}',
+            })
+            if (!res.ok) throw new Error(`额度端点 HTTP ${res.status}`)
+            const payload = await res.json()
+            const parsed = parseQuotaSummary(payload)
+            if (!parsed) return { ok: false, summary: '额度端点返回了无法解析的结构（协议可能改版）' }
+            return {
+              ok: true,
+              total: parsed.total,
+              windows: parsed.windows,
+              summary: renderQuota(parsed.windows, parsed.total),
+            }
+          } catch (error) {
+            return { ok: false, summary: `读不了额度：${error.message}` }
           }
-          const probe = getIdentity()
-          const query = probe.found
-            ? buildDirectQuery(probe.identity)
-            : `aid=582478&device_platform=web&_t=${Date.now()}`
-          const res = await fetch(`https://www.doubao.com${QUOTA_PATH}?${query}`, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              accept: 'application/json, text/plain, */*',
-              origin: 'https://www.doubao.com',
-              referer: 'https://www.doubao.com/chat/',
-              cookie: cookie.header,
-              'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-            },
-            body: '{}',
-          })
-          if (!res.ok) throw new Error(`额度端点 HTTP ${res.status}`)
-          const payload = await res.json()
-          const parsed = parseQuotaSummary(payload)
-          if (!parsed) return { ok: false, summary: '额度端点返回了无法解析的结构（协议可能改版）' }
-          return {
-            ok: true,
-            total: parsed.total,
-            windows: parsed.windows,
-            summary: renderQuota(parsed.windows, parsed.total),
-          }
-        } catch (error) {
-          return { ok: false, summary: `读不了额度：${error.message}` }
-        }
-      },
-      runCheckin: async () => runCheckin({
-        port: config.cdpPort,
-        exePath: config.exePath || undefined,
-        dryRun: false,
-        relaunchClient: config.relaunchClient,
-        timeoutMs: 30_000,
-      }),
-      startLogin: async () => {
-        if (loginTask) return loginState
-        loginState = { phase: 'starting', message: '正在拉起浏览器…' }
-        loginTask = loginWithBrowser({
-          timeoutMs: 180_000,
-          onProgress: msg => { loginState = { phase: 'waiting', message: msg } },
-        }).then(result => {
-          loginState = result.ok
-            ? { phase: 'success', message: result.message, ok: true }
-            : { phase: 'error', message: result.message, ok: false }
-          return result
-        }).catch(error => {
-          loginState = { phase: 'error', message: error.message, ok: false }
-          return { ok: false, message: error.message }
-        }).finally(() => { loginTask = null })
-        return loginState
-      },
-      pollLogin: () => loginState,
-      cancelLogin: () => { loginState = { phase: 'idle' } },
-      log,
+        },
+        runCheckin: async () => runCheckin({
+          port: config.cdpPort,
+          exePath: config.exePath || undefined,
+          dryRun: false,
+          relaunchClient: config.relaunchClient,
+          timeoutMs: 30_000,
+        }),
+        startLogin: async () => {
+          if (loginTask) return loginState
+          loginState = { phase: 'starting', message: '正在拉起浏览器…' }
+          loginTask = loginWithBrowser({
+            timeoutMs: 180_000,
+            onProgress: msg => { loginState = { phase: 'waiting', message: msg } },
+          }).then(result => {
+            loginState = result.ok
+              ? { phase: 'success', message: result.message, ok: true }
+              : { phase: 'error', message: result.message, ok: false }
+            return result
+          }).catch(error => {
+            loginState = { phase: 'error', message: error.message, ok: false }
+            return { ok: false, message: error.message }
+          }).finally(() => { loginTask = null })
+          return loginState
+        },
+        pollLogin: () => loginState,
+        cancelLogin: () => { loginState = { phase: 'idle' } },
+        log,
     })
-    log('卡片路由已注册: /plugins/dsh-doubao-signin/{quota,checkin/run,login/*}')
+      log('卡片路由已注册: /plugins/dsh-doubao-signin/{quota,checkin/run,login/*}')
+    })
   } else {
-    log('webServer 服务不可用，卡片路由未注册（工具不受影响）')
+    // 无 ctx.inject 的环境（测试替身）：退回同步探测，不影响工具
+    let webServer = undefined
+    try {
+      webServer = typeof ctx.get === 'function' ? ctx.get('webServer') : undefined
+      if (!webServer || typeof webServer.register !== 'function') {
+        try { webServer = ctx.webServer } catch { webServer = undefined }
+      }
+    } catch { webServer = undefined }
+    if (webServer && typeof webServer.register === 'function' && typeof ctx.effect === 'function') {
+      registerQuotaRoute(ctx, { webServer, readQuota: async () => ({ ok: false, summary: '测试环境' }), log })
+    }
   }
 }

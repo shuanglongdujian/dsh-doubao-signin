@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
 
 const DSH_ROOT = 'D:\\AI工具\\deepseek harness\\harness\\resources\\app\\dsh'
 const url = p => pathToFileURL(path.join(DSH_ROOT, p)).href
@@ -124,3 +125,12 @@ await assert.rejects(
 
 console.log('\n✅ 真 cordis Context 挂载通过：5 个工具、schema 合规、降级路径正常、两种 logger 形态兼容')
 void DSH_ROOT
+/* ===== 第五遍：webServer 路由注册契约（our-free-model 记录过的坑） ===== */
+{
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  assert.ok(
+    /ctx\.inject\(\['webServer'\]/.test(source),
+    '必须用 ctx.inject([\'webServer\']) 注册路由——ctx.get(\'webServer\') 在 apply 时返回 undefined，路由永远注册不上',
+  )
+  console.log('\n✅ webServer 路由用 ctx.inject 等待就绪（不是 ctx.get）')
+}
