@@ -63,11 +63,11 @@
       "versions": [
         {
           "version": "0.5.2",
-          "publishTimestamp": 1795497827,
+          "publishTimestamp": 1795497876,
           "source": {
             "type": "git",
             "url": "https://github.com/shuanglongdujian/dsh-doubao-signin.git",
-            "commit": "9c653b5c230542f0b7b5259aa547cc0087fedca9"
+            "commit": "d4164e73799d3f8d1878f2e16be96b31bfa4e087"
           },
           "engines": {
             "dsh": ">=0.2.2-rc.0"
