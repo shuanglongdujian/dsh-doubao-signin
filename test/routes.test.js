@@ -154,3 +154,91 @@ test('registerQuotaRoute：readQuota 返回 ok:false 时照实转发', async () 
   assert.equal(res.body.ok, false)
   assert.equal(res.body.summary, '客户端没在运行')
 })
+
+/* ===== 签到与扫码登录路由 ===== */
+
+test('registerQuotaRoute：注册 5 条路由（quota/checkin/login×3）', () => {
+  const h = makeHarness()
+  registerQuotaRoute(h.ctx, {
+    readQuota: async () => ({ ok: true, total: 1, windows: [] }),
+    runCheckin: async () => ({ ok: true, state: 'done', message: '签到成功' }),
+    startLogin: async () => ({ phase: 'starting' }),
+    pollLogin: () => ({ phase: 'waiting' }),
+    cancelLogin: () => {},
+  })
+  h.boot()
+  const paths = h.registered.map(r => r.path).sort()
+  assert.deepEqual(paths, [
+    '/plugins/dsh-doubao-signin/checkin/run',
+    '/plugins/dsh-doubao-signin/login/cancel',
+    '/plugins/dsh-doubao-signin/login/poll',
+    '/plugins/dsh-doubao-signin/login/start',
+    '/plugins/dsh-doubao-signin/quota',
+  ])
+})
+
+test('registerQuotaRoute：签到路由 POST 成功返回 state', async () => {
+  const h = makeHarness()
+  registerQuotaRoute(h.ctx, {
+    readQuota: async () => ({ ok: true }),
+    runCheckin: async () => ({ ok: true, state: 'signed', message: '签到成功 +200' }),
+  })
+  h.boot()
+  const handler = h.registered.find(r => r.path.endsWith('/checkin/run')).handler
+  const res = h.makeRes()
+  await handler(h.makeReq('POST', { host: 'localhost:1' }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.body.ok, true)
+  assert.equal(res.body.state, 'signed')
+})
+
+test('registerQuotaRoute：签到路由 GET 被拒（405）', async () => {
+  const h = makeHarness()
+  registerQuotaRoute(h.ctx, { readQuota: async () => ({ ok: true }), runCheckin: async () => ({ ok: true }) })
+  h.boot()
+  const handler = h.registered.find(r => r.path.endsWith('/checkin/run')).handler
+  const res = h.makeRes()
+  await handler(h.makeReq('GET', { host: 'localhost:1' }), res)
+  assert.equal(res.statusCode, 405)
+})
+
+test('registerQuotaRoute：扫码 start → poll → cancel 全链路', async () => {
+  const h = makeHarness()
+  let phase = 'idle'
+  registerQuotaRoute(h.ctx, {
+    readQuota: async () => ({ ok: true }),
+    startLogin: async () => { phase = 'waiting'; return { phase } },
+    pollLogin: () => ({ phase }),
+    cancelLogin: () => { phase = 'idle' },
+  })
+  h.boot()
+  const start = h.registered.find(r => r.path.endsWith('/login/start')).handler
+  const poll = h.registered.find(r => r.path.endsWith('/login/poll')).handler
+  const cancel = h.registered.find(r => r.path.endsWith('/login/cancel')).handler
+
+  let res = h.makeRes()
+  await start(h.makeReq('POST', { host: 'localhost:1' }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.body.phase, 'waiting')
+
+  res = h.makeRes()
+  await poll(h.makeReq('GET', { host: 'localhost:1' }), res)
+  assert.equal(res.body.phase, 'waiting')
+
+  res = h.makeRes()
+  await cancel(h.makeReq('POST', { host: 'localhost:1' }), res)
+  assert.equal(res.body.phase, 'idle')
+})
+
+test('registerQuotaRoute：扫码路由同样受 loopback 闸门保护', async () => {
+  const h = makeHarness()
+  registerQuotaRoute(h.ctx, {
+    readQuota: async () => ({ ok: true }),
+    startLogin: async () => ({ phase: 'starting' }),
+  })
+  h.boot()
+  const start = h.registered.find(r => r.path.endsWith('/login/start')).handler
+  const res = h.makeRes()
+  await start(h.makeReq('POST', { host: 'evil.example.com' }), res)
+  assert.equal(res.statusCode, 403)
+})

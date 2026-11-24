@@ -5,7 +5,7 @@
 #
 # 默认不启用任何工具开关以外的副作用：签到必须显式调用才会动客户端进程。
 - insert:
-    - id: doubao-signin
+    - id: dsh-doubao-signin
       name: 'dsh-doubao-signin'
       config:
         cdpPort: 9222
