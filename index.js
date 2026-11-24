@@ -15,6 +15,10 @@
  * @module dsh-doubao-signin
  */
 import { runCheckin } from './src/checkin.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import { loadCredentials, loginWithBrowser, credentialsPath, resolveCookieHeader } from './src/login.js'
 import {
   MODELS,
   buildChatBody,
@@ -33,8 +37,8 @@ import {
   isRefusal,
 } from './src/hardening.js'
 import { ClientSigner, lines } from './src/signer.js'
-import { parseQuotaSummary, renderQuota } from './src/quota.js'
-import { directChat } from './src/direct.js'
+import { parseQuotaSummary, renderQuota, QUOTA_PATH } from './src/quota.js'
+import { directChat, buildDirectQuery } from './src/direct.js'
 import { findClientIdentity, toIdentity } from './src/identity.js'
 import { registerQuotaRoute } from './src/routes.js'
 
@@ -174,9 +178,24 @@ function makeLogger(ctx) {
  * @returns {Promise<void>} 注册完成。
  */
 export async function apply(ctx, rawConfig = {}) {
+  // —— 诊断探针：DSH_DOUBAO_DEBUG=1 时把装载轨迹写进 ~/.dsh/doubao-signin-debug.log ——
+  // Electron 主进程的 console 用户看不到，这是唯一能穿透到文件系统的观测点。
+  const debugSink = (() => {
+    try {
+      if (process.env.DSH_DOUBAO_DEBUG !== '1') return null
+      const home = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
+      const file = path.join(home, 'doubao-signin-debug.log')
+      return message => fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`)
+    } catch {
+      return null
+    }
+  })()
+  debugSink?.(`apply entered, pid=${process.pid}`)
+
   const config = { ...DEFAULTS, ...rawConfig }
   const logger = makeLogger(ctx)
   const log = (...args) => {
+    debugSink?.(args.map(a => String(a)).join(' '))
     try {
       logger.info(...args)
     } catch {
@@ -218,6 +237,82 @@ export async function apply(ctx, rawConfig = {}) {
   }
 
   const modelIds = Object.keys(MODELS)
+
+  /**
+   * 统一的 cookie 来源：扫码保存的凭据优先，其次借客户端页面。
+   * @returns {Promise<{header: string, source: string, ready: boolean}>} cookie 头与来源。
+   */
+  const cookieSource = async () => resolveCookieHeader({
+    fromClient: async () => {
+      const client = await ensureSigner()
+      return client.cookieHeader()
+    },
+  })
+
+  // —— doubao_login：浏览器扫码登录（不需要豆包桌面客户端） ——
+  ctx.tools.register({
+    name: 'doubao_login',
+    description:
+      '打开浏览器扫码登录豆包（用抖音 App 扫），把会话 cookie 保存到本机，'
+      + '之后聊天/额度/签到都用这份凭据。**不需要安装豆包桌面客户端**。'
+      + '会拉起一个独立的浏览器窗口（不影响你日常浏览器），扫码完成后自动关闭。'
+      + '超时默认 3 分钟；重复调用会复用同一个浏览器目录，通常免扫码。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        timeoutMs: { type: 'integer', description: '等待扫码的毫秒数，默认 180000（3 分钟）。' },
+        browserPath: { type: 'string', description: '显式指定 Chrome/Edge 路径，缺省自动发现。' },
+        dryRun: { type: 'boolean', description: '只看当前登录态、不拉起浏览器。' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean' },
+          message: { type: 'string' },
+          cookieCount: { type: 'integer' },
+        },
+        required: ['ok', 'message'],
+      },
+      render(_args, value) {
+        const lines = [`${value.ok ? '✓' : '✗'} ${value.message}`]
+        if (value.path) lines.push(`  凭据: ${value.path}`)
+        if (value.cookieCount) lines.push(`  cookie 数: ${value.cookieCount}`)
+        if (value.missingCore?.length) lines.push(`  缺: ${value.missingCore.join(', ')}`)
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
+    timeoutMs: 240_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      return { card: 'generic', title: args.dryRun ? '豆包登录状态' : '豆包扫码登录', kind: 'other', rawInput: args }
+    },
+    async execute(args) {
+      if (args.dryRun === true) {
+        const saved = loadCredentials()
+        if (!saved) {
+          return { ok: false, message: `尚未登录。没有找到 ${credentialsPath()}。去掉 dryRun 再调用即可拉起扫码。` }
+        }
+        return {
+          ok: true,
+          message: `已登录（保存于 ${saved.savedAt}，${saved.cookies.length} 个 cookie）`,
+          path: credentialsPath(),
+          cookieCount: saved.cookies.length,
+        }
+      }
+      const progress = []
+      const result = await loginWithBrowser({
+        timeoutMs: args.timeoutMs ?? 180_000,
+        browserPath: args.browserPath || undefined,
+        onProgress: msg => progress.push(msg),
+      })
+      return { ...result, ...(progress.length ? { progress } : {}) }
+    },
+  })
+
 
   ctx.tools.register({
     name: 'doubao_chat',
@@ -313,10 +408,9 @@ export async function apply(ctx, rawConfig = {}) {
             body,
             identity: probe.identity,
             getCookie: async () => {
-              // cookie 借 CDP 从客户端页面读（客户端运行中唯一不被锁的来源）。
-              // 这里先起 signer 连接但不走签名路径。
-              const client = await ensureSigner()
-              return client.cookieHeader()
+              // 扫码保存的凭据优先；没有才借客户端页面（客户端运行中唯一不被锁的来源）
+              const cookie = await cookieSource()
+              return cookie.header
             },
             signal: ac.signal,
           })
@@ -554,8 +648,33 @@ export async function apply(ctx, rawConfig = {}) {
     },
     async execute(_args, exec) {
       try {
-        const client = await ensureSigner()
-        const payload = await client.getQuota(exec?.signal)
+        // 额度端点只认 cookie：扫码凭据优先，无需客户端
+        const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
+        let payload
+        if (cookie.header) {
+          const probe = getIdentity()
+          const query = probe.found
+            ? buildDirectQuery(probe.identity)
+            : `aid=582478&device_platform=web&_t=${Date.now()}`
+          const res = await fetch(`https://www.doubao.com${QUOTA_PATH}?${query}`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/plain, */*',
+              origin: 'https://www.doubao.com',
+              referer: 'https://www.doubao.com/chat/',
+              cookie: cookie.header,
+              'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+            },
+            body: '{}',
+            signal: exec?.signal,
+          })
+          if (!res.ok) throw new Error(`额度端点 HTTP ${res.status}`)
+          payload = await res.json()
+        } else {
+          const client = await ensureSigner()
+          payload = await client.getQuota(exec?.signal)
+        }
         const parsed = parseQuotaSummary(payload)
         if (!parsed) {
           return {
@@ -568,14 +687,16 @@ export async function apply(ctx, rawConfig = {}) {
           ok: true,
           total: parsed.total,
           windows: parsed.windows,
+          source: cookie.source,
           summary: renderQuota(parsed.windows, parsed.total),
         }
       } catch (error) {
         const message = error?.message ?? String(error)
-        if (/客户端|端口|frontierSign|doubao\.com 页面/.test(message)) {
-          return { ok: false, summary: `读不了额度（${message}）。额度查询同样需要客户端在运行且 CDP 端口已开。` }
+        return {
+          ok: false,
+          summary: `额度查询失败: ${message}\n`
+            + '先跑 doubao_login（扫码登录）或 doubao_status 看凭据来源。',
         }
-        return { ok: false, summary: `额度查询失败: ${message}` }
       }
     },
   })

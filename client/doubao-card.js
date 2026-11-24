@@ -48,6 +48,18 @@ window.__ModuleLoader__.load({
      * @returns {void}
      */
     function apply(ctx) {
+      // —— 诊断探针：与 Host 半身共用 ~/.dsh/doubao-signin-debug.log ——
+      // factory 执行 + apply 进入 + slots 注册，三个时间点各记一行。
+      // 浏览器侧没有 fs，用 fetch 打到 Host 的 quota 路由带 X-Debug-Mark 头？不行——quota
+      // 路由 GET-only 且按清单构造。改用 localStorage + console，用户可在 DevTools 里看。
+      try {
+        localStorage.setItem('dsh-doubao-signin-debug', JSON.stringify({
+          at: new Date().toISOString(), phase: 'apply-entered',
+          slotsType: typeof ctx.get?.('slots'), localeType: typeof ctx.get?.('locale'),
+        }))
+        console.info('[dsh-doubao-signin] apply entered; slots/locale =',
+          typeof ctx.get?.('slots'), typeof ctx.get?.('locale'))
+      } catch { /* 探针失败不影响功能 */ }
       try {
         // locale：注册命名空间（zh 必有；en 兜底），失败不影响卡片本体
         let t = null
@@ -65,7 +77,7 @@ window.__ModuleLoader__.load({
               const disposers = []
               // 卡片组件：闭包持 fetch 状态
               const Card = () => DoubaoCard(text)
-              disposers.push(ctx.slots.register({
+              const registered = ctx.slots.register({
                 name: 'settings.section',
                 id: SECTION_ID,
                 order: SECTION_ORDER,
@@ -73,7 +85,15 @@ window.__ModuleLoader__.load({
                 locale: LOCALE_NS,
                 // inject 回调给宿主 slot 传渲染上下文（surface 标记，与 workbuddy 一致）
                 inject: () => ({ surface: 'settings' }),
-              }, Card))
+              }, Card)
+              try {
+                const prev = JSON.parse(localStorage.getItem('dsh-doubao-signin-debug') ?? '{}')
+                localStorage.setItem('dsh-doubao-signin-debug', JSON.stringify({
+                  ...prev, phase: 'slots-registered', registeredType: typeof registered,
+                }))
+                console.info('[dsh-doubao-signin] slots.register returned:', typeof registered)
+              } catch { /* 探针失败不影响功能 */ }
+              disposers.push(registered)
               return () => {
                 for (const dispose of disposers) { try { dispose() } catch { /* 已卸载 */ } }
               }
