@@ -156,3 +156,35 @@ void DSH_ROOT
   )
   console.log('\n✅ webServer inject 回调作用域无未定义变量')
 }
+
+/* ===== 第七遍：真 cordis + webServer 服务 → inject 回调必须注册出 5 条路由 ===== */
+{
+  const app2 = new Context()
+  app2.provide('tools')
+  const registeredTools2 = []
+  app2.set('tools', { register: d => registeredTools2.push(d.name) })
+
+  // 假 webServer：模拟宿主提供的服务，记录所有注册路由
+  const routes = []
+  app2.provide('webServer')
+  app2.set('webServer', { register: entry => { routes.push(entry); return () => {} } })
+
+  const mod2 = await import('file:///D:/AI%E5%B7%A5%E5%85%B7/deepseek%20harness/github%E9%A1%B9%E7%9B%AE/dsh-doubao-signin/index.js')
+  await mod2.apply(app2, {})
+
+  // inject 回调在 webServer ACTIVE 时应同步触发
+  await new Promise(resolve => setTimeout(resolve, 100))
+
+  const paths = routes.map(r => r.path).sort()
+  assert.ok(paths.length >= 5, `webServer 就绪后应注册至少 5 条路由，实际 ${paths.length}: ${JSON.stringify(paths)}`)
+  for (const p of [
+    '/plugins/dsh-doubao-signin/quota',
+    '/plugins/dsh-doubao-signin/checkin/run',
+    '/plugins/dsh-doubao-signin/login/start',
+    '/plugins/dsh-doubao-signin/login/poll',
+    '/plugins/dsh-doubao-signin/login/cancel',
+  ]) {
+    assert.ok(paths.includes(p), `缺路由: ${p}`)
+  }
+  console.log('\n✅ 真 cordis：webServer 就绪后 5 条 loopback 路由全部注册')
+}
