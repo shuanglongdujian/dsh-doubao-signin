@@ -137,6 +137,42 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 
 
 
+## 账号池与自动签到（v0.8.0 起）
+
+### 账号池
+
+`doubao_login` 带 `label` 参数即存成独立账号（各自一份浏览器 profile 与凭据，互不影响）：
+
+```
+doubao_login { "label": "工作号" }
+doubao_login { "label": "备用号" }
+doubao_accounts            # 看池子 + 每个账号的剩余额度
+```
+
+- **自动择号**：多账号时选剩余额度最多的那个。
+- **失效换号**：凭据失效（登录过期）时自动换下一个；网络错、参数错**不换**（换了也一样错）。
+- **额度感知**：每个账号的额度会被记下来，用于择号。
+
+### 每日自动签到
+
+- DSH 启动后延迟 30 秒跑一次；今天跑过就跳过（按 UTC+8 日历日，与豆包的签到日界一致）。
+- 结果写进独立文档 `~/.dsh/doubao-signin/auto-checkin.json`。
+- ⚠️ **只在豆包电脑版客户端可用时才签**——网页端没有签到入口（活动页写着「该活动仅支持在豆包电脑版参与」），盲调领取接口会返回 710010702 并**作废当天额度**（不可回滚）。
+
+### 关于「对话记录」
+
+实测（2026-11-25，用会话列表接口 `POST /alice/conversation/list` 做前后 diff）：
+
+| 请求形态 | 会话列表新增 |
+|---|---|
+| 现状（need_create=true + need_ack=true） | **0 条** |
+| need_create=false | 0 条 |
+| need_create=false + need_ack=false | 0 条 |
+| web_platform=web | 0 条 |
+| 无 client_meta | 0 条（但请求被拒 710020202） |
+
+服务端虽然会在 `SSE_ACK` 里回 `conversation_info`（`name: "新对话"`），但那个 id **不在会话列表里**、单独查也是 404——它不是一条真实记录，客户端只是本地显示了它。
+
 ## 在模型选择器里用豆包（v0.6.0 起）
 
 装完重启 DSH，**模型选择器里会出现「豆包 Doubao」分组**，7 个模型：

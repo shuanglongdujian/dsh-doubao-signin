@@ -134,10 +134,13 @@ describe('插件装载', () => {
     assert.ok(resolved.context?.contextWindow > 0)
   })
 
-  test('注册五个工具，schema 全部通过核心校验', async () => {
+  test('注册六个工具，schema 全部通过核心校验', async () => {
     const tools = await load()
     const names = tools.map(t => t.definition.name)
-    assert.deepEqual(names.sort(), ['doubao_chat', 'doubao_checkin', 'doubao_login', 'doubao_quota', 'doubao_status'])
+    assert.deepEqual(names.sort(), [
+      'doubao_accounts', 'doubao_chat', 'doubao_checkin',
+      'doubao_login', 'doubao_quota', 'doubao_status',
+    ])
   })
 
   test('工具名不重复', async () => {

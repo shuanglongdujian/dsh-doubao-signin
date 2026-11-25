@@ -18,7 +18,7 @@ import { runCheckin } from './src/checkin.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { loadCredentials, loginWithBrowser, credentialsPath, resolveCookieHeader } from './src/login.js'
+import { loadCredentials, loginWithBrowser, credentialsPath, resolveCookieHeader, readAccountCookies } from './src/login.js'
 import {
   MODELS,
   buildChatBody,
@@ -42,6 +42,17 @@ import { directChat, buildDirectQuery } from './src/direct.js'
 import { findClientIdentity, toIdentity } from './src/identity.js'
 import { registerQuotaRoute } from './src/routes.js'
 import { createDoubaoAdapter, PROVIDER } from './src/doubao-adapter.js'
+import {
+  accountCookieHeader,
+  addAccount,
+  listEnabledAccounts,
+  loadPool,
+  markAccountFailed,
+  markAccountOk,
+  pickAccount,
+  withAccountFailover,
+} from './src/account-pool.js'
+import { runAutoCheckin, loadAutoCheckinState } from './src/auto-checkin.js'
 
 /** Cordis 插件名。 */
 export const name = 'doubao-signin'
@@ -64,6 +75,12 @@ export const DEFAULTS = {
   directFirst: true,
   /** 直连被风控拒绝后，本次进程内是否还允许降级到 CDP 签名桥。 */
   allowBridgeFallback: true,
+  /** 每日自动签到（启动后延迟 autoCheckinDelayMs 跑一次；今天跑过就跳过）。 */
+  autoCheckin: true,
+  /** 自动签到的启动延迟（毫秒）。默认 30 秒：别跟启动抢资源，也等凭据续期先跑一轮。 */
+  autoCheckinDelayMs: 30_000,
+  /** 多账号池：凭据失效时自动换下一个账号。 */
+  accountFailover: true,
 }
 
 /** 聊天工具的参数 JSON Schema（隐式根对象，逐属性写 required）。 */
@@ -250,6 +267,14 @@ export async function apply(ctx, rawConfig = {}) {
       const client = await ensureSigner()
       return client.cookieHeader()
     },
+    fromPool: () => {
+      // 账号池优先（多账号时选额度最多的那个）
+      const accounts = listEnabledAccounts()
+      const picked = pickAccount(accounts)
+      if (!picked) return undefined
+      const header = accountCookieHeader(picked)
+      return header ? { header, source: 'pool', account: picked, ready: true } : undefined
+    },
   })
 
   // —— LLM provider：让豆包模型出现在模型选择器 ——
@@ -263,6 +288,105 @@ export async function apply(ctx, rawConfig = {}) {
   } catch (error) {
     log('LLM provider 注册失败（工具仍可用）: ' + error.message)
   }
+
+  // —— doubao_accounts：账号池管理（多账号 / 换号 / 看额度）——
+  ctx.tools.register({
+    name: 'doubao_accounts',
+    description:
+      '管理豆包账号池：列出账号与各自的额度、切换主账号、停用/启用某个账号。'
+      + '多个账号时，聊天和额度查询会自动用剩余额度最多的那个；'
+      + '某个账号凭据失效时会自动换下一个。'
+      + '加账号用 doubao_login（带 label 参数会存成独立账号）。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'enable', 'disable'],
+          description: 'list=看账号池（默认）；enable/disable=启用或停用某个账号。',
+        },
+        accountId: { type: 'string', description: 'enable/disable 时指定账号 id。' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ok: { type: 'boolean' },
+          summary: { type: 'string' },
+        },
+        required: ['ok', 'summary'],
+      },
+      render(_args, value) {
+        return [{ type: 'text', text: value.summary }]
+      },
+    },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => true,
+    presentCall() {
+      return { card: 'generic', title: '豆包账号池', kind: 'other', rawInput: {} }
+    },
+    async execute(args) {
+      const pool = loadPool()
+      if (args.action === 'enable' || args.action === 'disable') {
+        const a = pool.accounts.find(x => x.id === args.accountId)
+        if (!a) return { ok: false, summary: `没有这个账号: ${args.accountId}` }
+        if (args.action === 'enable') {
+          a.enabled = true
+          a.disabledReason = null
+        } else {
+          a.enabled = false
+          a.disabledReason = '用户停用'
+        }
+        savePool(pool)
+        return { ok: true, summary: `账号 ${a.label ?? a.id} 已${args.action === 'enable' ? '启用' : '停用'}` }
+      }
+
+      // list：顺带读每个账号的额度
+      const rows = []
+      for (const a of pool.accounts) {
+        let quota = a.quota ?? null
+        const header = accountCookieHeader(a)
+        if (header) {
+          try {
+            const res = await fetch(`https://www.doubao.com${QUOTA_PATH}?aid=497858&device_platform=web&_t=${Date.now()}`, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json', accept: 'application/json, text/plain, */*',
+                origin: 'https://www.doubao.com', referer: 'https://www.doubao.com/chat/',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+                cookie: header,
+              },
+              body: '{}',
+              signal: AbortSignal.timeout(15_000),
+            })
+            if (res.ok) {
+              const parsed = parseQuotaSummary(await res.json())
+              if (parsed) {
+                quota = { total: parsed.total, windows: parsed.windows.length }
+                markAccountOk(a.id, quota)
+              }
+            }
+          } catch (error) {
+            markAccountFailed(a.id, error.message, false)
+          }
+        }
+        rows.push(
+          `  ${a.label ?? a.id}  ${a.enabled === false ? '(已停用)' : ''}  `
+          + `剩余额度 ${quota?.total ?? '未知'}  ${a.lastError ? '上次错误: ' + a.lastError : ''}`,
+        )
+      }
+      const auto = loadAutoCheckinState()
+      const summary = [
+        `账号池（${pool.accounts.length} 个）:`,
+        ...(rows.length ? rows : ['  （空）—— 用 doubao_login 扫码登录一个账号']),
+        `自动签到: ${auto.enabled ? '开' : '关'} | 上次跑: ${auto.lastDate ?? '从未'}`,
+      ].join('\n')
+      return { ok: true, summary }
+    },
+  })
 
   // —— doubao_login：浏览器扫码登录（不需要豆包桌面客户端） ——
   ctx.tools.register({
@@ -279,6 +403,12 @@ export async function apply(ctx, rawConfig = {}) {
         timeoutMs: { type: 'integer', description: '等待扫码的毫秒数，默认 180000（3 分钟）。' },
         browserPath: { type: 'string', description: '显式指定 Chrome/Edge 路径，缺省自动发现。' },
         dryRun: { type: 'boolean', description: '只看当前登录态、不拉起浏览器。' },
+        label: {
+          type: 'string',
+          description:
+            '把这个登录存成独立的账号（多账号池用）。留空则用默认账号。'
+            + '每个账号有独立的浏览器 profile 与凭据，互不影响。',
+        },
       },
     },
     output: {
@@ -319,11 +449,23 @@ export async function apply(ctx, rawConfig = {}) {
         }
       }
       const progress = []
+      const accountId = args.label
+        ? args.label.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || ('acct-' + Date.now())
+        : undefined
       const result = await loginWithBrowser({
         timeoutMs: args.timeoutMs ?? 180_000,
         browserPath: args.browserPath || undefined,
+        accountId,
         onProgress: msg => progress.push(msg),
       })
+      // 带 label 的登录进账号池
+      if (result.ok && accountId) {
+        const pairs = readAccountCookies(accountId)
+        if (pairs.length) {
+          addAccount({ label: args.label, cookies: pairs, dirName: accountId })
+          result.message += `（已加入账号池：${args.label}）`
+        }
+      }
       return { ...result, ...(progress.length ? { progress } : {}) }
     },
   })
@@ -423,16 +565,39 @@ export async function apply(ctx, rawConfig = {}) {
       let viaDirect = false
       if (config.directFirst) {
         const probe = getIdentity()
-        const result = await directChat({
-          body,
-          identity: probe.found ? probe.identity : undefined,
-          getCookie: async () => {
-            // 扫码保存的凭据优先；没有才借客户端页面（客户端运行中唯一不被锁的来源）
-            const cookie = await cookieSource()
-            return cookie.header
-          },
-          signal: ac.signal,
-        })
+        // 账号池优先：多账号时凭据失效自动换号（成熟反代插件的通用做法）
+        const pooled = listEnabledAccounts()
+        const attempt = async cookieHeader => {
+          const r = await directChat({
+            body,
+            identity: probe.found ? probe.identity : undefined,
+            getCookie: async () => cookieHeader,
+            signal: ac.signal,
+          })
+          return r.ok
+            ? { ok: true, sse: r.sse }
+            : { ok: false, kind: r.kind, message: r.message }
+        }
+
+        let result
+        if (config.accountFailover !== false && pooled.length > 1) {
+          const failover = await withAccountFailover({
+            accounts: pooled,
+            call: async (cookieHeader, account) => {
+              const r = await attempt(cookieHeader)
+              if (r.ok) log(`直连成功（账号 ${account.label ?? account.id}）`)
+              return r
+            },
+          })
+          result = failover.ok
+            ? { ok: true, sse: failover.result.sse }
+            : { ok: false, kind: failover.result?.kind ?? 'http', message: failover.message ?? '所有账号都失败了' }
+          if (!failover.ok) log(`账号池全部失败（试了 ${failover.tried.length} 个）: ${result.message}`)
+        } else {
+          const cookie = await cookieSource()
+          result = await attempt(cookie.header)
+        }
+
         if (result.ok) {
           raw = result.sse
           viaDirect = true
@@ -892,5 +1057,41 @@ export async function apply(ctx, rawConfig = {}) {
     if (webServer && typeof webServer.register === 'function' && typeof ctx.effect === 'function') {
       registerQuotaRoute(ctx, { webServer, readQuota: async () => ({ ok: false, summary: '测试环境' }), log })
     }
+  }
+
+  // —— 每日自动签到（对齐 our-free-model 的 auto-checkin 形态）——
+  // DSH 启动后延迟一小段再跑；今天跑过就跳过；结果写进独立文档。
+  //
+  // ⚠️ 豆包的安全约束：网页端**没有**签到入口（活动页写着「仅支持在豆包电脑版参与」），
+  // 盲调领取接口会返回 710010702 并作废当天额度。所以这里只在
+  // **豆包电脑版客户端可用**时用 CDP 点它的真实按钮；否则如实告知。
+  if (config.autoCheckin !== false) {
+    const timer = setTimeout(() => {
+      runAutoCheckin({
+        delayMs: 0,
+        log: m => log('自动签到: ' + m),
+        accounts: () => listEnabledAccounts(),
+        runOne: async () => {
+          // 只在客户端可用时尝试（客户端会用自己的签名点真按钮）
+          try {
+            const r = await runCheckin({
+              port: config.cdpPort,
+              exePath: config.exePath || undefined,
+              dryRun: false,
+              relaunchClient: config.relaunchClient,
+              timeoutMs: 25_000,
+            })
+            return { ok: r.ok === true, state: r.state ?? 'unknown', message: r.message }
+          } catch (error) {
+            return {
+              ok: false,
+              state: 'client_required',
+              message: '签到需要豆包电脑版客户端（网页端没有签到入口，且网页代签会作废当天额度）：' + error.message,
+            }
+          }
+        },
+      }).catch(error => log('自动签到失败: ' + error.message))
+    }, config.autoCheckinDelayMs ?? 30_000)
+    timer.unref?.()
   }
 }

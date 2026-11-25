@@ -51,6 +51,34 @@ export function browserProfileDir() {
 }
 
 /**
+ * 某账号的独立目录（多账号各一份登录态，互不影响）。
+ * @param {string} [accountId] - 账号 id；缺省用「默认账号」。
+ * @returns {string} 目录路径。
+ */
+export function accountStateDir(accountId) {
+  const base = join(stateDir(), 'accounts')
+  return accountId ? join(base, accountId) : stateDir()
+}
+
+/**
+ * 某账号的凭据路径。
+ * @param {string} [accountId] - 账号 id。
+ * @returns {string} 文件路径。
+ */
+export function accountCredentialsPath(accountId) {
+  return join(accountStateDir(accountId), 'credentials.json')
+}
+
+/**
+ * 某账号的浏览器 profile 路径。
+ * @param {string} [accountId] - 账号 id。
+ * @returns {string} 目录路径。
+ */
+export function accountBrowserProfileDir(accountId) {
+  return join(accountStateDir(accountId), 'browser-profile')
+}
+
+/**
  * 读已保存的凭据。
  * @returns {{cookies: Array<{name: string, value: string}>, savedAt: string}|undefined} 凭据或 undefined。
  */
@@ -171,6 +199,7 @@ export function findBrowser(env = process.env, platform = process.platform) {
  * @param {number} [opts.port] - CDP 端口，默认 9333。
  * @param {number} [opts.timeoutMs] - 等待扫码的总时长，默认 180000（3 分钟）。
  * @param {(msg: string) => void} [opts.onProgress] - 进度回调（给人看的）。
+ * @param {string} [opts.accountId] - 账号 id：多账号时各用各的 profile 与凭据。
  * @param {object} [opts.env] - 环境变量。
  * @param {string} [opts.platform] - 平台。
  * @returns {Promise<{ok: boolean, message: string, path?: string, cookieCount?: number, missingCore?: string[]}>} 结果。
@@ -181,13 +210,14 @@ export async function loginWithBrowser(opts = {}) {
   const port = opts.port ?? 9333
   const timeoutMs = opts.timeoutMs ?? 180_000
   const say = opts.onProgress ?? (() => {})
+  const accountId = opts.accountId
 
   const browserPath = opts.browserPath || findBrowser(env, platform)
   if (!browserPath) {
     return { ok: false, message: '没找到 Chrome 或 Edge。装一个再用扫码登录，或改用已登录的豆包客户端。' }
   }
 
-  const profile = browserProfileDir()
+  const profile = accountId ? accountBrowserProfileDir(accountId) : browserProfileDir()
   mkdirSync(profile, { recursive: true })
 
   say(`启动浏览器: ${browserPath}`)
@@ -238,7 +268,17 @@ export async function loginWithBrowser(opts = {}) {
         cookies = (res?.result?.cookies ?? res?.cookies ?? []).filter(c => isDoubao(c?.domain))
         const ready = sessionReadiness(cookies)
         if (ready.ok) {
-          const file = saveCredentials(cookies.map(c => ({ name: c.name, value: c.value })))
+          const pairs = cookies.map(c => ({ name: c.name, value: c.value }))
+          // 有账号 id → 存进该账号的独立目录；否则存默认位置
+          let file
+          if (accountId) {
+            const dir = accountStateDir(accountId)
+            mkdirSync(dir, { recursive: true })
+            file = accountCredentialsPath(accountId)
+            writeFileSync(file, JSON.stringify({ savedAt: new Date().toISOString(), cookies: pairs }, null, 2), { encoding: 'utf8' })
+          } else {
+            file = saveCredentials(pairs)
+          }
           say(`登录成功，已保存 ${cookies.length} 个 cookie`)
           return { ok: true, message: `扫码登录成功，凭据已保存（${cookies.length} 个 cookie）`, path: file, cookieCount: cookies.length }
         }
@@ -261,12 +301,32 @@ export async function loginWithBrowser(opts = {}) {
 }
 
 /**
- * 统一取 cookie：优先已保存的扫码凭据，其次借客户端页面。
+ * 读某账号已保存的 cookie 对。
+ * @param {string} accountId - 账号 id。
+ * @returns {Array<{name: string, value: string}>} cookie 对（没有则空数组）。
+ */
+export function readAccountCookies(accountId) {
+  try {
+    const parsed = JSON.parse(readFileSync(accountCredentialsPath(accountId), 'utf8'))
+    return Array.isArray(parsed?.cookies) ? parsed.cookies : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 统一取 cookie：账号池优先 → 已保存的扫码凭据 → 借客户端页面。
  * @param {object} opts - 依赖。
  * @param {() => Promise<string>} [opts.fromClient] - 从客户端页面取 cookie 的回调。
- * @returns {Promise<{header: string, source: 'saved'|'client', ready: boolean}>} cookie 头与来源。
+ * @param {() => object|undefined} [opts.fromPool] - 从账号池取（返回 {header, account}）。
+ * @returns {Promise<{header: string, source: 'pool'|'saved'|'client', account?: object, ready: boolean}>} cookie 头与来源。
  */
-export async function resolveCookieHeader({ fromClient } = {}) {
+export async function resolveCookieHeader({ fromClient, fromPool } = {}) {
+  // 账号池优先（多账号时由调用方挑额度最多的）
+  if (typeof fromPool === 'function') {
+    const pooled = fromPool()
+    if (pooled?.header) return { ...pooled, source: 'pool', ready: true }
+  }
   const saved = loadCredentials()
   if (saved) {
     const ready = sessionReadiness(saved.cookies)
