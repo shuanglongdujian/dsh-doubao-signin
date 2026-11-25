@@ -70,11 +70,42 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
       return { id: provider, name: '豆包 Doubao' }
     },
 
+    /**
+     * 重试策略。
+     *
+     * 必须实现：dsh-llm 的 prepareRoutes 会**直接调用** adapter.providerRetryPolicy(provider)
+     * （src/index.ts），不是可选探测——纯手写 adapter 缺这个方法，注册时抛 TypeError，
+     * 表现为「模型不进选择器」。继承 LlmAdapter 基类的插件有默认实现所以没事。
+     *
+     * 返回的是**已解析策略**（不是配置片段）：延迟字段摊平在顶层。
+     * 嵌进 backoff: {} 会让调度器读到 NaN，把可恢复的瞬时故障变成中止的回合
+     * （our-free-model 源码里记了这个坑）。
+     *
+     * RATE_LIMIT 故意不在重试集里：豆包风控对重试敏感（710022004 是滑块验证，
+     * 重试只会加深它），这与我自己的 Circuit 熔断是同一个道理。
+     * @param {string} _provider - 路由 id（未使用，策略与具体路由无关）。
+     * @returns {object} 已解析的重试策略。
+     */
+    providerRetryPolicy(_provider) {
+      return Object.freeze({
+        mode: 'normal',
+        maxRetries: 2,
+        retryableCodes: Object.freeze(['EMPTY_RESPONSE', 'SERVER', 'TIMEOUT', 'TRANSPORT']),
+        initialDelayMs: 700,
+        maxDelayMs: 8000,
+        jitterRatio: 0.2,
+      })
+    },
+
     async listModels(provider) {
+      // LlmModelInfo: { provider, id, name, description?, inputModalities?, badge? }
+      // name 是选择器里显示的模型名，description 是副标题——别把描述塞进 name。
       return Object.entries(MODELS).map(([id, m]) => ({
         provider,
         id,
-        name: m.desc || id,
+        name: m.name ?? id,
+        ...(m.desc ? { description: m.desc } : {}),
+        inputModalities: ['text'],
       }))
     },
 
@@ -83,8 +114,10 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
       return {
         provider,
         id: model,
-        name: known?.desc ?? model,
-        context: { contextWindow: 131_072 },
+        name: known?.name ?? model,
+        ...(known?.desc ? { description: known.desc } : {}),
+        context: { contextWindow: known?.contextWindow ?? 131_072 },
+        defaultMaxTokens: 32_768,
       }
     },
 

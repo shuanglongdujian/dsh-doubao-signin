@@ -7,15 +7,18 @@
  * @module src/protocol.js
  */
 
-/** 已知模型档案。`itemKey` 来自豆包工作台的路由键，不是火山方舟的 model id。 */
+/**
+ * 已知模型档案。`itemKey` 来自豆包工作台的路由键，不是火山方舟的 model id。
+ * `name` 是模型选择器里显示的名字，`desc` 是副标题，`contextWindow` 是上下文容量。
+ */
 export const MODELS = {
-  'doubao-pro-chat': { kind: 'chat', desc: '豆包主对话（默认）' },
-  'doubao-lite': { kind: 'chat', itemKey: 'seed-lite-7b', desc: '轻量快速' },
-  'doubao-work-auto': { kind: 'chat', itemKey: '9', workspace: true, desc: '豆包工作自动路由' },
-  'doubao-2.1-pro': { kind: 'chat', itemKey: '5', workspace: true, desc: '豆包 2.1 Pro' },
-  'deepseek-v4.1-flash': { kind: 'chat', itemKey: 'person-deepseek-v4-1-flash-261017', workspace: true, desc: '豆包工作里的 DeepSeek' },
-  'kimi-k3': { kind: 'chat', itemKey: 'person-kimi-k3-261111', workspace: true, desc: '豆包工作里的 Kimi' },
-  'glm-5.3': { kind: 'chat', itemKey: 'person-glm-5-3-261111', workspace: true, desc: '豆包工作里的 GLM' },
+  'doubao-pro-chat': { kind: 'chat', name: '豆包', desc: '豆包主对话（默认）', contextWindow: 131_072 },
+  'doubao-lite': { kind: 'chat', name: '豆包 Lite', itemKey: 'seed-lite-7b', desc: '轻量快速', contextWindow: 131_072 },
+  'doubao-work-auto': { kind: 'chat', name: '豆包工作 · 自动', itemKey: '9', workspace: true, desc: '豆包工作自动路由（会员额度）', contextWindow: 262_144 },
+  'doubao-2.1-pro': { kind: 'chat', name: '豆包 2.1 Pro', itemKey: '5', workspace: true, desc: '豆包 2.1 Pro（会员额度）', contextWindow: 262_144 },
+  'deepseek-v4.1-flash': { kind: 'chat', name: 'DeepSeek V4.1 Flash', itemKey: 'person-deepseek-v4-1-flash-261017', workspace: true, desc: '豆包工作里的 DeepSeek V4.1', contextWindow: 262_144 },
+  'kimi-k3': { kind: 'chat', name: 'Kimi K3', itemKey: 'person-kimi-k3-261111', workspace: true, desc: '豆包工作里的 Kimi K3', contextWindow: 262_144 },
+  'glm-5.3': { kind: 'chat', name: 'GLM 5.3', itemKey: 'person-glm-5-3-261111', workspace: true, desc: '豆包工作里的 GLM 5.3', contextWindow: 262_144 },
 }
 
 /** 默认路由用的 bot id。 */

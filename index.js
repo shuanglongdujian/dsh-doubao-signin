@@ -186,7 +186,9 @@ export async function apply(ctx, rawConfig = {}) {
       if (process.env.DSH_DOUBAO_DEBUG !== '1') return null
       const home = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh')
       const file = path.join(home, 'doubao-signin-debug.log')
-      return message => fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`)
+      // 显式 utf8：Windows 上 appendFileSync 默认按 utf8 写，但用 Buffer 更稳
+      // （避免宿主的默认编码把中文写成乱码，排查时根本看不清）。
+      return message => fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`, { encoding: 'utf8' })
     } catch {
       return null
     }

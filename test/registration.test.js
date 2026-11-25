@@ -89,11 +89,18 @@ function makeLlm() {
         assert.ok(!adapters[p], `provider ${p} 重复注册`)
         adapters[p] = adapter
       }
-      // 宿主注册时会调这两个方法做结构化校验
+      // 宿主注册时会调这两个方法做结构化校验（dsh-llm prepareRoutes）。
+      // 替身必须和宿主一样严格——否则缺方法这种缺口在测试里是绿的、在宿主里却炸。
       for (const p of providers) {
         const info = adapter.providerInfo(p)
         assert.equal(info.id, p)
         assert.ok(typeof info.name === 'string' && info.name.length > 0)
+        const policy = adapter.providerRetryPolicy(p)
+        assert.ok(policy, 'providerRetryPolicy 必须返回策略')
+        assert.equal(policy.mode, 'normal')
+        assert.ok(typeof policy.maxRetries === 'number')
+        assert.ok(Array.isArray(policy.retryableCodes) && policy.retryableCodes.length > 0)
+        assert.equal(typeof policy.initialDelayMs, 'number', '延迟字段必须在顶层')
       }
       return () => { for (const p of providers) delete adapters[p] }
     },

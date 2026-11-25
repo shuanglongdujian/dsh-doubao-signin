@@ -153,6 +153,10 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 
 原理：插件通过 `ctx.llm.registerAdapter(['doubao'], adapter)` 注册一个 LLM provider（契约见 dsh-llm 源码）。宿主会自动发 `llm/adapters-updated`，UI 随即刷新选择器。adapter 是纯手写对象——不需要 extends、不需要 pi-ai、不新增任何依赖。
 
+> ⚠️ 纯手写 adapter **必须自己实现 `providerRetryPolicy(provider)`**——宿主注册时会**直接调用**它（不是可选探测），缺方法会抛 `TypeError` 并被 cordis 吞掉，表现为「模型不进选择器」但没有任何报错。
+>
+> 返回的必须是**已解析策略**（延迟字段摊平在顶层：`initialDelayMs` / `maxDelayMs` / `jitterRatio`；嵌进 `backoff: {}` 会让调度器读到 `NaN`），且 **`RATE_LIMIT` 不该进 `retryableCodes`**——豆包风控对重试敏感（710022004 是滑块验证，重试只会加深它）。
+
 工具调用是**文本仿真**：把工具表拼进提示词、约定 `<tool_call>` 标记，回来后解析成 DSH 的 tool-call 块，agent loop 照常执行。
 
 ### ⚠️ 通道的真实边界（实测，别踩）
@@ -260,7 +264,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 ## 开发与测试
 
 ```sh
-node --test              # 181 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
+node --test              # 187 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 
