@@ -41,12 +41,13 @@ import { parseQuotaSummary, renderQuota, QUOTA_PATH } from './src/quota.js'
 import { directChat, buildDirectQuery } from './src/direct.js'
 import { findClientIdentity, toIdentity } from './src/identity.js'
 import { registerQuotaRoute } from './src/routes.js'
+import { createDoubaoAdapter, PROVIDER } from './src/doubao-adapter.js'
 
 /** Cordis 插件名。 */
 export const name = 'doubao-signin'
 
-/** 唯一硬依赖是 tools；缺了别的只是少功能，不应该让插件挂不上。 */
-export const inject = ['tools']
+/** 唯一硬依赖：tools（工具）和 llm（让豆包模型出现在模型选择器）。 */
+export const inject = ['tools', 'llm']
 
 /** 默认配置；patch 里的 config 会逐项覆盖。 */
 export const DEFAULTS = {
@@ -248,6 +249,18 @@ export async function apply(ctx, rawConfig = {}) {
       return client.cookieHeader()
     },
   })
+
+  // —— LLM provider：让豆包模型出现在模型选择器 ——
+  // 契约来自 dsh-llm registerAdapter：结构化校验，不需要 extends / pi-ai / 新依赖。
+  // llm 服务由 inject=['tools','llm'] 保证就绪。
+  try {
+    const adapter = createDoubaoAdapter({ config, getIdentity, cookieSource, ensureSigner, log })
+    const releaseAdapter = ctx.llm.registerAdapter([PROVIDER], adapter)
+    ctx.effect(() => () => releaseAdapter(), 'doubao: llm adapter')
+    log('LLM provider 已注册: ' + PROVIDER + '（' + Object.keys(MODELS).length + ' 个模型进入选择器）')
+  } catch (error) {
+    log('LLM provider 注册失败（工具仍可用）: ' + error.message)
+  }
 
   // —— doubao_login：浏览器扫码登录（不需要豆包桌面客户端） ——
   ctx.tools.register({

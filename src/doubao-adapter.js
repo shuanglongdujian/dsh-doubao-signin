@@ -1,0 +1,193 @@
+/**
+ * 豆包 LLM adapter —— 让豆包模型出现在 DSH 模型选择器里。
+ *
+ * 契约来自本机源码实读（dsh-llm/src/index.ts:416 registerAdapter）：
+ * - inject 加 'llm'，注册 handler 只调 providerInfo / providerRetryPolicy；
+ * - listModels 返回非空数组才会进入选择器（空数组 = 分组被过滤）；
+ * - stream(options) 是核心：输入 GenerateOptions，产出 StreamChunk；
+ * - block-start/block-end 成对，usage 在 finish 前，finish 最后；
+ * - 纯手写对象即可（our-free-model 已跑通），不需要 extends / pi-ai / 新 peerDependency。
+ *
+ * @module src/doubao-adapter.js
+ */
+import { MODELS, buildChatBody, parseSseLine, renderToolPrompt, extractToolCalls, flattenMessages } from './protocol.js'
+import { directChat } from './direct.js'
+import { lines } from './signer.js'
+
+/** 注册到选择器的 provider id。 */
+export const PROVIDER = 'doubao'
+
+/**
+ * 创建豆包 adapter。
+ * @param {object} deps - 依赖（全部来自 index.js 的闭包）。
+ * @param {object} deps.config - 配置。
+ * @param {Function} deps.getIdentity - 取设备身份。
+ * @param {Function} deps.cookieSource - 取 cookie {header, source, ready}。
+ * @param {Function} deps.ensureSigner - 取签名桥。
+ * @param {Function} deps.log - 日志。
+ * @returns {object} adapter。
+ */
+export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureSigner, log = () => {} }) {
+  /**
+   * 选路并拿 SSE 原文：直连优先（有设备身份时），否则 CDP 签名桥。
+   * @param {string} model - 模型 id。
+   * @param {object} options - GenerateOptions。
+   * @returns {Promise<string>} SSE 原文。
+   */
+  async function pickRaw(model, options) {
+    const msgs = options.system
+      ? [{ role: 'system', content: options.system }, ...(options.messages ?? [])]
+      : (options.messages ?? [])
+    const toolPrompt = options.tools?.length ? renderToolPrompt(options.tools) : ''
+    const body = buildChatBody({
+      model,
+      messages: msgs,
+      toolPrompt,
+      reasoningEffort: options.reasoningEffort,
+    })
+
+    // 直连：只有从客户端 Local State 读到设备身份才试（健康账号不碰签名）
+    if (config.directFirst !== false) {
+      const probe = getIdentity()
+      if (probe.found) {
+        const r = await directChat({
+          body,
+          identity: probe.identity,
+          getCookie: async () => (await cookieSource()).header,
+          signal: options.signal,
+        })
+        if (r.ok) return r.sse
+        log(`直连失败(${r.kind})，降级 CDP 签名桥: ${r.message}`)
+      }
+    }
+
+    const client = await ensureSigner()
+    return client.postChat(body, options.signal)
+  }
+
+  return {
+    providerInfo(provider) {
+      return { id: provider, name: '豆包 Doubao' }
+    },
+
+    async listModels(provider) {
+      return Object.entries(MODELS).map(([id, m]) => ({
+        provider,
+        id,
+        name: m.desc || id,
+      }))
+    },
+
+    async resolveModel(provider, model) {
+      const known = MODELS[model]
+      return {
+        provider,
+        id: model,
+        name: known?.desc ?? model,
+        context: { contextWindow: 131_072 },
+      }
+    },
+
+    async *stream(options) {
+      const model = MODELS[options.model] ? options.model : (config.defaultModel ?? 'doubao-pro-chat')
+      let raw
+      try {
+        raw = await pickRaw(model, options)
+      } catch (error) {
+        // 两条路都不通时，把「怎么办」说清楚——网页直连被风控 + 没有客户端签名器
+        const msg = String(error?.message ?? error)
+        if (/710022004|人机验证|滑块/.test(msg)) {
+          throw new Error(
+            '豆包拒绝了这次请求（风控 710022004，需要人机验证）。'
+            + '两条可行路径：① 装豆包电脑版并登录，插件会用它的签名通道重试；'
+            + '② 在豆包网页端手工过一次滑块验证后立刻再试。',
+          )
+        }
+        if (/客户端|CDP|调试端口|端口/.test(msg)) {
+          throw new Error(
+            '没有可用的豆包通道：网页直连会被风控拦（710022004），'
+            + '而 CDP 签名桥需要豆包电脑版客户端在运行。'
+            + '请安装并登录豆包电脑版（客户端会提供签名能力），或先在网页端过一次滑块。',
+          )
+        }
+        throw error
+      }
+
+      // 全文 SSE → 事件数组（postChat/directChat 都是一次性拿全文，无法逐块流式）
+      const events = []
+      for await (const line of lines(raw)) {
+        const ev = parseSseLine(line)
+        if (ev) events.push(ev)
+      }
+
+      // 上游错误码检测（风控/审核/无效参数）——以 finish error 结束，带可读原因
+      const errEv = events.find(e => e.kind === 'unknown' && e.raw && typeof e.raw === 'object')
+      if (errEv) {
+        const code = Number(errEv.raw?.error_code ?? errEv.raw?.code ?? 0)
+        if (code === 710022004) {
+          throw new Error('豆包风控要求人机验证（710022004）。请在豆包客户端过一次滑块，或改用已登录客户端的签名桥。')
+        }
+        if (code === 710020202) {
+          throw new Error('豆包拒绝了请求体（710020202 common invalid param）。可能协议改版或该模型当前不可用。')
+        }
+      }
+
+      let idx = 0
+
+      // 工具调用：文本仿真 → 解析 → tool-call 块
+      if (options.tools?.length) {
+        const text = events.filter(e => e.kind === 'text').map(e => e.text).join('')
+        const parsed = extractToolCalls(text)
+        if (parsed.text?.trim()) {
+          const t = parsed.text.trim()
+          yield { type: 'block-start', index: idx, blockType: 'text' }
+          yield { type: 'text-delta', index: idx, text: t }
+          yield { type: 'block-end', index: idx, block: { type: 'text', text: t } }
+          idx++
+        }
+        for (const call of parsed.calls) {
+          const args = call.function?.arguments ?? '{}'
+          const name = call.function?.name ?? 'unknown'
+          yield { type: 'block-start', index: idx, blockType: 'tool-call' }
+          yield { type: 'tool-call-delta', index: idx, id: call.id, name, argumentsDelta: args }
+          yield { type: 'block-end', index: idx, block: { type: 'tool-call', id: call.id, name, arguments: args } }
+          idx++
+        }
+        yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
+        yield { type: 'finish', reason: { kind: parsed.calls.length ? 'tool-calls' : 'stop' } }
+        return
+      }
+
+      // 普通对话：text / reasoning 各自成块
+      let text = ''
+      let reasoning = ''
+      let textOpen = false
+      let reasonOpen = false
+      const reasonIdx = 1
+      for (const ev of events) {
+        if (ev.kind === 'text') {
+          if (!textOpen) {
+            yield { type: 'block-start', index: idx, blockType: 'text' }
+            textOpen = true
+          }
+          yield { type: 'text-delta', index: idx, text: ev.text }
+          text += ev.text
+        } else if (ev.kind === 'think') {
+          if (!reasonOpen) {
+            yield { type: 'block-start', index: reasonIdx, blockType: 'reasoning' }
+            reasonOpen = true
+          }
+          yield { type: 'reasoning-delta', index: reasonIdx, text: ev.text }
+          reasoning += ev.text
+        }
+      }
+      if (textOpen) yield { type: 'block-end', index: idx, block: { type: 'text', text } }
+      if (reasonOpen) yield { type: 'block-end', index: reasonIdx, block: { type: 'reasoning', text: reasoning } }
+
+      yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+}
+
+void flattenMessages

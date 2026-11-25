@@ -137,6 +137,34 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 
 
 
+## 在模型选择器里用豆包（v0.6.0 起）
+
+装完重启 DSH，**模型选择器里会出现「豆包 Doubao」分组**，7 个模型：
+
+| 模型 id | 说明 |
+|---|---|
+| `doubao-pro-chat` | 豆包主对话（默认） |
+| `doubao-lite` | 轻量快速（seed-lite-7b） |
+| `doubao-work-auto` | 豆包工作自动路由（会员额度） |
+| `doubao-2.1-pro` | 豆包 2.1 Pro（会员额度） |
+| `deepseek-v4.1-flash` | 豆包工作里的 DeepSeek V4.1 |
+| `kimi-k3` | 豆包工作里的 Kimi K3 |
+| `glm-5.3` | 豆包工作里的 GLM 5.3 |
+
+原理：插件通过 `ctx.llm.registerAdapter(['doubao'], adapter)` 注册一个 LLM provider（契约见 dsh-llm 源码）。宿主会自动发 `llm/adapters-updated`，UI 随即刷新选择器。adapter 是纯手写对象——不需要 extends、不需要 pi-ai、不新增任何依赖。
+
+工具调用是**文本仿真**：把工具表拼进提示词、约定 `<tool_call>` 标记，回来后解析成 DSH 的 tool-call 块，agent loop 照常执行。
+
+### ⚠️ 通道的真实边界（实测，别踩）
+
+| 情况 | 能不能用 |
+|---|---|
+| 装了豆包电脑版且登录过 | ✅ 走客户端签名通道（CDP），最稳 |
+| 只有扫码凭据、没装客户端 | ⚠️ 网页直连会被风控拦（`710022004` 滑块验证）——**先在豆包网页端手工过一次滑块**，或装客户端 |
+| 既没客户端也没过滑块 | ❌ 选中模型会明确报错并给出两条可行路径 |
+
+这不是实现问题，是豆包的风控设计：网页会话的聊天请求要求人机验证，签名只能由客户端产生。
+
 ## 健壮性（v0.2.0 起）
 
 聊天路径内置了四层防护，全部来自同类插件的实测逆向结论：
@@ -232,7 +260,7 @@ dsh --profile <你的profile> --dump-config | grep -A4 "dsh-doubao-signin"
 ## 开发与测试
 
 ```sh
-node --test              # 170 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
+node --test              # 181 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
 node test/live-mount.mjs # 真 cordis Context 下挂载验证
 ```
 

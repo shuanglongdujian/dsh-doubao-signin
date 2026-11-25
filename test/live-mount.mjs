@@ -192,3 +192,35 @@ void DSH_ROOT
   }
   console.log('\n✅ 真 cordis：webServer 就绪后 5 条 loopback 路由全部注册')
 }
+
+/* ===== 第八遍：真 cordis 里 llm provider 注册（模型进选择器的前提） ===== */
+{
+  const app3 = new Context()
+  app3.provide('tools')
+  app3.set('tools', { register: () => () => {} })
+
+  const adapters = {}
+  app3.provide('llm')
+  app3.set('llm', {
+    registerAdapter(providers, adapter) {
+      for (const p of providers) {
+        assert.ok(!adapters[p], `provider ${p} 重复注册`)
+        adapters[p] = adapter
+        // 宿主注册时会做结构化校验
+        const info = adapter.providerInfo(p)
+        assert.equal(info.id, p)
+        assert.ok(info.name)
+      }
+      return () => { for (const p of providers) delete adapters[p] }
+    },
+  })
+
+  const mod3 = await import('file:///D:/AI%E5%B7%A5%E5%85%B7/deepseek%20harness/github%E9%A1%B9%E7%9B%AE/dsh-doubao-signin/index.js')
+  assert.ok(mod3.inject.includes('llm'), 'inject 必须声明 llm——否则 ctx.llm 读不到')
+  await mod3.apply(app3, {})
+
+  assert.ok(adapters.doubao, '应注册 doubao provider')
+  const models = await adapters.doubao.listModels('doubao')
+  assert.ok(models.length > 0, 'listModels 返回空数组 = 选择器会过滤掉这个分组')
+  console.log('\n✅ 真 cordis：llm provider 已注册，' + models.length + ' 个豆包模型可进选择器')
+}

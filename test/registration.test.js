@@ -64,19 +64,67 @@ async function load(config = {}) {
   const mod = await import('../index.js')
   assert.equal(typeof mod.apply, 'function', '插件必须导出 apply')
   const tools = makeTools()
+  const llm = makeLlm()
   const ctx = {
     tools,
+    llm,
     logger: { info() {}, warn() {}, error() {} },
   }
   await mod.apply(ctx, { exePath: path.join(here, 'nope', 'Doubao.exe'), ...config })
   return tools.registered
 }
 
+/**
+ * 假的 llm 服务：记录 adapter 注册（模型进选择器全靠它）。
+ * @returns {{adapters: object, registerAdapter: Function}} 假服务。
+ */
+function makeLlm() {
+  const adapters = {}
+  return {
+    adapters,
+    registerAdapter(providers, adapter) {
+      assert.ok(Array.isArray(providers) && providers.length > 0, 'providers 必须非空数组')
+      for (const p of providers) {
+        assert.equal(typeof p, 'string')
+        assert.ok(!adapters[p], `provider ${p} 重复注册`)
+        adapters[p] = adapter
+      }
+      // 宿主注册时会调这两个方法做结构化校验
+      for (const p of providers) {
+        const info = adapter.providerInfo(p)
+        assert.equal(info.id, p)
+        assert.ok(typeof info.name === 'string' && info.name.length > 0)
+      }
+      return () => { for (const p of providers) delete adapters[p] }
+    },
+  }
+}
+
 describe('插件装载', () => {
   test('导出 name 与 inject', async () => {
     const mod = await import('../index.js')
     assert.equal(mod.name, 'doubao-signin')
-    assert.deepEqual(mod.inject, ['tools'])
+    assert.deepEqual(mod.inject, ['tools', 'llm'])
+  })
+
+  test('注册 LLM provider，模型进入选择器', async () => {
+    const mod = await import('../index.js')
+    const tools = makeTools()
+    const llm = makeLlm()
+    await mod.apply({ tools, llm, logger: { info() {}, warn() {}, error() {} } }, {})
+    assert.ok(llm.adapters.doubao, '应注册 doubao provider')
+    const models = await llm.adapters.doubao.listModels('doubao')
+    assert.ok(models.length > 0, 'listModels 返回空数组 = 分组被选择器过滤掉')
+    for (const m of models) {
+      assert.equal(m.provider, 'doubao')
+      assert.ok(m.id && m.name)
+    }
+    // id 不重复
+    assert.equal(new Set(models.map(m => m.id)).size, models.length)
+    // resolveModel 要给上下文窗口
+    const resolved = await llm.adapters.doubao.resolveModel('doubao', models[0].id)
+    assert.equal(resolved.provider, 'doubao')
+    assert.ok(resolved.context?.contextWindow > 0)
   })
 
   test('注册五个工具，schema 全部通过核心校验', async () => {
