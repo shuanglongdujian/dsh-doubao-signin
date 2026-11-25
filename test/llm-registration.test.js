@@ -24,7 +24,7 @@ const { createDoubaoAdapter } = await import('../src/doubao-adapter.js')
  */
 function makeAdapter() {
   return createDoubaoAdapter({
-    config: { defaultModel: 'doubao-pro-chat', directFirst: false },
+    config: { defaultModel: 'doubao', directFirst: false },
     getIdentity: () => ({ found: false }),
     cookieSource: async () => ({ header: '', source: 'none', ready: false }),
     ensureSigner: async () => ({ postChat: async () => '', cookieHeader: async () => '' }),

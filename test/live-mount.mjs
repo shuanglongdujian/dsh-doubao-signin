@@ -90,9 +90,19 @@ assert.ok(
 assert.notEqual(ck.state, 'signed', 'dryRun 绝不能返回签到成功')
 console.log(`\ncheckin 实跑状态: [${ck.state}] ${ck.message}`)
 
-// chat 缺客户端时抛清晰错误
+// chat：v0.7 起有扫码凭据就能直连（不再强制依赖客户端）。
+// 没有凭据时报「凭据/通道」相关的清晰错误——不能是笼统的"undefined is not valid JSON"。
 const chat = registered.get('doubao_chat')
-await assert.rejects(() => chat.execute({ prompt: 'hi' }, { signal: new AbortController().signal }), /客户端/)
+try {
+  const r = await chat.execute({ prompt: 'hi' }, { signal: new AbortController().signal })
+  // 有凭据：能跑通（可能因上游风控失败，但那是有意义的业务错误）
+  assert.ok(r && typeof r.text === 'string', '成功时应返回文本')
+} catch (error) {
+  assert.ok(
+    /凭据|cookie|登录|通道|客户端|风控|人机验证|额度/.test(String(error.message)),
+    `错误信息要说清怎么办，实际: ${error.message}`,
+  )
+}
 
 // chat 对未知模型提前报错，不去碰网络
 await assert.rejects(

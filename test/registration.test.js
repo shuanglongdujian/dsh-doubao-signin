@@ -170,7 +170,7 @@ describe('render 投影', () => {
   test('chat 正常文本', async () => {
     const tools = await load()
     const chat = tools.find(t => t.definition.name === 'doubao_chat').definition
-    const blocks = chat.output.render({}, { text: '你好', model: 'doubao-pro-chat', notes: [] })
+    const blocks = chat.output.render({}, { text: '你好', model: 'doubao', notes: [] })
     assert.equal(blocks.length, 1)
     assert.equal(blocks[0].text, '你好')
   })
@@ -239,20 +239,25 @@ describe('execute 的降级行为', () => {
     }
   })
 
-  test('chat 在客户端不存在时抛清晰错误', async () => {
+  test('chat 失败时报能指导下一步的错误（凭据/通道/风控），不是笼统异常', async () => {
     const tools = await load()
     const chat = tools.find(t => t.definition.name === 'doubao_chat').definition
-    await assert.rejects(
-      () => chat.execute({ prompt: 'hi' }, { signal: undefined }),
-      /客户端/,
-    )
+    try {
+      const r = await chat.execute({ prompt: 'hi' }, { signal: undefined })
+      assert.ok(r && typeof r.text === 'string')
+    } catch (error) {
+      assert.ok(
+        /凭据|cookie|登录|通道|客户端|风控|人机验证|额度|不存在/.test(String(error.message)),
+        `错误信息要说清怎么办，实际: ${error.message}`,
+      )
+    }
   })
 
   test('显式路径不存在时点名那个路径，而不是笼统说没装', async () => {
-    const tools = await load()
-    const chat = tools.find(t => t.definition.name === 'doubao_chat').definition
+    // 找客户端的函数本身必须点名路径——它是给用户看的诊断信息
+    const { findClient } = await import('../src/checkin.js')
     await assert.rejects(
-      () => chat.execute({ prompt: 'hi' }, { signal: undefined }),
+      () => findClient('/definitely/not/here/Doubao.exe'),
       /指定的豆包客户端不存在/,
     )
   })

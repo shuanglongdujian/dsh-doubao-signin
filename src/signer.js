@@ -287,9 +287,22 @@ function sleep(ms) {
 
 /**
  * 把 SSE 原文切成逐行异步迭代器。
+ *
+ * **只 yield `data:` 行**——SSE 帧由三部分组成：
+ * ```
+ * id: 0            ← 帧序号，不是数据
+ * event: STREAM_CHUNK
+ * data: {...}      ← 只有这行是数据
+ * ```
+ * 早先把这三种行全丢进解析器，导致 `id: 0` 被当成正文（回答变成
+ * "id: 0id: 1id: 2…"），而真正的正文反倒漏了。
  * @param {string} text - 完整 SSE 文本。
- * @returns {AsyncGenerator<string>} 行流。
+ * @returns {AsyncGenerator<string>} 行流（只有 data 行）。
  */
 export async function* lines(text) {
-  for (const line of String(text).split('\n')) yield line
+  for (const line of String(text).split('\n')) {
+    const trimmed = line.trimStart()
+    if (!trimmed.startsWith('data:')) continue
+    yield trimmed.slice(5).trim()
+  }
 }

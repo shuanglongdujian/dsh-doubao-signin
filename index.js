@@ -54,7 +54,7 @@ export const DEFAULTS = {
   cdpPort: 9222,
   relaunchClient: false,
   exePath: '',
-  defaultModel: 'doubao-pro-chat',
+  defaultModel: 'doubao',
   timeoutMs: 180_000,
   /** 轮间最小间隔（毫秒）。 */
   minIntervalMs: 1500,
@@ -385,9 +385,11 @@ export async function apply(ctx, rawConfig = {}) {
       let body = buildChatBody({ model, messages, toolPrompt })
 
       // 32K 预算：长会话压平后网关会静默拒
-      const budgeted = applyPromptBudget(JSON.parse(body.messages[0].content).text)
-      if (budgeted.truncated) {
-        body.messages[0].content = JSON.stringify({ text: budgeted.text })
+      // （正文现在在 content_block[0].content.text_block.text，不再是 content 字符串）
+      const textBlock = body.messages[0].content_block?.[0]?.content?.text_block
+      const budgeted = applyPromptBudget(textBlock?.text ?? '')
+      if (budgeted.truncated && textBlock) {
+        textBlock.text = budgeted.text
       }
 
       const release = await pacer.begin()
@@ -413,44 +415,73 @@ export async function apply(ctx, rawConfig = {}) {
         return e
       }
 
-      // —— 路径一：无签名直连（健康账号不碰客户端）——
+      // —— 路径一：无签名直连（扫码凭据即可，不需要客户端）——
+      // 实测（2026-11-25）：只要有有效会话 cookie + 正确的 block 结构 body +
+      // 与 cookie 配套的桌面身份参数，直连就能拿到正常正文。
+      // 有客户端时额外带上 device_id（风控按它聚合，用客户端的更可信）。
       let raw = null
       let viaDirect = false
       if (config.directFirst) {
         const probe = getIdentity()
-        if (probe.found) {
-          const result = await directChat({
-            body,
-            identity: probe.identity,
-            getCookie: async () => {
-              // 扫码保存的凭据优先；没有才借客户端页面（客户端运行中唯一不被锁的来源）
-              const cookie = await cookieSource()
-              return cookie.header
-            },
-            signal: ac.signal,
-          })
-          if (result.ok) {
-            raw = result.sse
-            viaDirect = true
-          } else if (result.kind === 'risk' || result.kind === 'auth') {
-            // 风控/未登录：直接判失败（risk 会让熔断器决定要不要降级桥）
-            if (result.kind === 'risk') circuit.trip()
+        const result = await directChat({
+          body,
+          identity: probe.found ? probe.identity : undefined,
+          getCookie: async () => {
+            // 扫码保存的凭据优先；没有才借客户端页面（客户端运行中唯一不被锁的来源）
+            const cookie = await cookieSource()
+            return cookie.header
+          },
+          signal: ac.signal,
+        })
+        if (result.ok) {
+          raw = result.sse
+          viaDirect = true
+        } else if (result.kind === 'auth') {
+          // 凭据过期：先静默续期（用本地浏览器 profile，不弹窗），再试一次
+          const { ensureSession } = await import('./src/session.js')
+          const renewed = await ensureSession({ onProgress: m => log(`凭据续期: ${m}`) })
+          if (!renewed.ok) {
             release()
             clearTimeout(timer)
             exec?.signal?.removeEventListener('abort', onAbort)
             throw new Error(
-              result.message
-              + (config.allowBridgeFallback
-                ? '。直连已被风控拦截，且签名桥同样依赖这个会话——请在豆包客户端里完成一次人机验证后再试。'
-                : ''),
+              `${result.message}。静默续期也失败：${renewed.message}。`
+              + '跑一次 doubao_login 扫码登录即可（凭据会持久化，之后不需要重复扫）。',
             )
           }
-          // 其它失败（http 层）静默落进签名桥路径
+          // 续期成功后再试一次直连
+          const retry = await directChat({
+            body,
+            identity: probe.found ? probe.identity : undefined,
+            getCookie: async () => (await cookieSource()).header,
+            signal: ac.signal,
+          })
+          if (retry.ok) {
+            raw = retry.sse
+            viaDirect = true
+          } else {
+            if (retry.kind === 'risk') circuit.trip()
+            release()
+            clearTimeout(timer)
+            exec?.signal?.removeEventListener('abort', onAbort)
+            throw new Error(retry.message)
+          }
+        } else if (result.kind === 'risk') {
+          // 风控：熔断并给出可行动指引（签名桥需要客户端）
+          circuit.trip()
+          release()
+          clearTimeout(timer)
+          exec?.signal?.removeEventListener('abort', onAbort)
+          throw new Error(
+            result.message
+            + '。两个可行办法：① 在豆包网页端手工过一次滑块验证（账号级的，过了直连就通）；'
+            + '② 装豆包电脑版并登录，插件会用它的签名通道重试。',
+          )
         }
-        // 身份没找到时也直接走签名桥（那边会给出指引）
+        // 其它失败（http 层，如请求体被拒）静默落进签名桥路径
       }
 
-      // —— 路径二：CDP 签名桥（直连失败/被禁用/身份缺失时）——
+      // —— 路径二：CDP 签名桥（直连失败/被禁用时）——
       if (raw === null) {
         try {
           const client = await ensureSigner()

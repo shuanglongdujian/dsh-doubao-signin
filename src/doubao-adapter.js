@@ -46,17 +46,32 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
       reasoningEffort: options.reasoningEffort,
     })
 
-    // 直连：只有从客户端 Local State 读到设备身份才试（健康账号不碰签名）
+    // 直连：扫码凭据即可（有客户端时额外带 device_id，风控按它聚合，客户端的更可信）
     if (config.directFirst !== false) {
       const probe = getIdentity()
-      if (probe.found) {
-        const r = await directChat({
+      const r = await directChat({
+        body,
+        identity: probe.found ? probe.identity : undefined,
+        getCookie: async () => (await cookieSource()).header,
+        signal: options.signal,
+      })
+      if (r.ok) return r.sse
+      if (r.kind === 'auth') {
+        // 凭据过期：静默续期（不弹窗），再试一次
+        const { ensureSession } = await import('./session.js')
+        const renewed = await ensureSession({ onProgress: m => log(`凭据续期: ${m}`) })
+        if (!renewed.ok) {
+          throw new Error(`${r.message}。静默续期也失败：${renewed.message}。跑一次 doubao_login 扫码登录即可。`)
+        }
+        const retry = await directChat({
           body,
-          identity: probe.identity,
+          identity: probe.found ? probe.identity : undefined,
           getCookie: async () => (await cookieSource()).header,
           signal: options.signal,
         })
-        if (r.ok) return r.sse
+        if (retry.ok) return retry.sse
+        log(`直连续期后仍失败(${retry.kind}): ${retry.message}`)
+      } else {
         log(`直连失败(${r.kind})，降级 CDP 签名桥: ${r.message}`)
       }
     }
@@ -122,7 +137,7 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
     },
 
     async *stream(options) {
-      const model = MODELS[options.model] ? options.model : (config.defaultModel ?? 'doubao-pro-chat')
+      const model = MODELS[options.model] ? options.model : (config.defaultModel ?? 'doubao')
       let raw
       try {
         raw = await pickRaw(model, options)

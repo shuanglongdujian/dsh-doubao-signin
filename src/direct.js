@@ -19,7 +19,13 @@
 import { CHAT_PATH, DEFAULT_BOT_ID } from './protocol.js'
 
 /** 聊天车道的 aid（connect-doubao 抓包值）。 */
-export const CHAT_AID = '582478'
+/**
+ * 聊天车道的 aid。
+ *
+ * 实测（2026-11-25，带真实扫码凭据）：**497858** 能拿到正常正文；
+ * 582478 是另一种 aid（额度等端点用），聊天端点用它会返回空流。
+ */
+export const CHAT_AID = '497858'
 
 /** 必需的会话 cookie（缺任何一个都不能直连）。 */
 export const REQUIRED_COOKIE_NAMES = [
@@ -36,10 +42,6 @@ export const REQUIRED_COOKIE_NAMES = [
 
 /** 核心 cookie：缺了就算未登录。 */
 export const CORE_COOKIE_NAMES = ['sessionid', 'sessionid_ss', 'sid_tt', 'uid_tt']
-
-/** 直连请求的桌面客户端 UA（与身份里的 chromiumVersion 对齐时最稳）。 */
-const DIRECT_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 SamanthaDoubao/2.35.12'
 
 /**
  * 判断 cookie 头是否具备直连条件。
@@ -59,40 +61,49 @@ export function cookieReadiness(cookieHeader) {
 }
 
 /**
- * 构造直连的 query（woc-jpg 实测流式可用的完整形状）。
- * @param {object} identity - toIdentity 的产物。
+ * 构造直连的 query。
+ *
+ * 实测结论（2026-11-25，用真实扫码凭据验证）：
+ * - `web_platform=desktop` + `pc_version` 与客户端版本一致时，豆包返回
+ *   SSE_ACK + 正常正文（实测「收到」）；
+ * - 之前用 `web_platform=web` + 客户端版本号混搭，会撞风控 710022004
+ *   （会话被判为「请求自称是谁」与「会话属于谁」不符）。
+ *
+ * 所以身份必须**整体一致**：桌面 UA + desktop 平台参数 + 同版本号。
+ * @param {object} identity - toIdentity 的产物（没有客户端时传 undefined）。
  * @param {object} [env] - 环境变量（测试可注入）。
  * @returns {string} query string。
  */
 export function buildDirectQuery(identity, env = process.env) {
   const params = new URLSearchParams({
     aid: CHAT_AID,
-    channel: env.DOUBAO_CHANNEL ?? 'win',
-    client_platform: 'pc_client',
+    version_code: '20800',
+    language: 'zh',
     device_platform: 'web',
     doubao_device_platform: 'web',
-    pc_version: identity.clientVersion ?? '2.35.12',
-    runtime: 'web',
-    runtime_version: '3.41.0',
-    web_platform: 'web',
-    language: 'zh',
-    pkg_type: 'release_version',
     real_aid: CHAT_AID,
+    pkg_type: 'release_version',
+    pc_version: identity?.clientVersion ?? '2.32.6',
+    doubao_pc_version: '5.72.66',
+    samantha_web: '1',
+    web_platform: 'desktop',
+    'use-olympus-account': '1',
+    // 实测那组参数用的是固定 0（不是随机 uuid）
+    web_tab_id: '0',
     region: 'CN',
     sys_region: 'CN',
-    samantha_web: '1',
-    'use-olympus-account': '1',
-    version_code: '20800',
-    device_id: identity.deviceId,
-    fp: identity.fp,
-    web_id: identity.webId ?? identity.deviceId,
-    web_tab_id: globalThis.crypto.randomUUID(),
-    tz_name: env.DOUBAO_TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'Etc/GMT-8',
-    chromium_version: identity.chromiumVersion ?? '147.0.7727.149',
-    tea_uuid: identity.deviceId,
+    // 没有客户端身份时留空——不能编造 device_id（风控按它聚合）
+    device_id: identity?.deviceId ?? '',
+    fp: identity?.fp ?? '',
+    web_id: identity?.webId ?? '',
+    tea_uuid: identity?.deviceId ?? '',
   })
   return params.toString()
 }
+
+/** 直连用的桌面 UA——与 query 里的 desktop 平台参数配套（身份必须一致）。 */
+export const DIRECT_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) DoubaoDesktop/2.32.6 Chrome/147.0.7727.149 Safari/537.36'
 
 /**
  * 构造直连请求头。
@@ -167,7 +178,21 @@ export async function directChat(opts) {
     return { ok: false, kind: 'risk', message: '直连被风控拒绝（710022004，滑块验证）', status: res.status }
   }
   if (text.includes('710012001')) {
-    return { ok: false, kind: 'auth', message: '直连被上游判为未登录（710012001）', status: res.status }
+    return { ok: false, kind: 'auth', message: '直连被上游判为未登录（710012001）——凭据过期，需要续期或重新扫码', status: res.status }
+  }
+  if (text.includes('710020202')) {
+    return { ok: false, kind: 'http', message: '直连请求体被拒（710020202 common invalid param）——协议形状可能变了', status: res.status }
+  }
+  // 上游可能把错误放进 SSE 帧里（HTTP 仍是 200）——扫一遍
+  const errMatch = /"error_code"\s*:\s*(\d+)/.exec(text)
+  if (errMatch) {
+    const code = Number(errMatch[1])
+    return {
+      ok: false,
+      kind: code === 710022004 ? 'risk' : code === 710012001 ? 'auth' : 'http',
+      message: `上游返回错误 ${code}`,
+      status: res.status,
+    }
   }
   return { ok: true, sse: text }
 }

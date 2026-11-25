@@ -57,26 +57,36 @@ test('cookieReadiness：空 cookie', () => {
 
 /* ===== query 构造 ===== */
 
-test('buildDirectQuery 带身份三元组与桌面身份标记', () => {
+test('buildDirectQuery 走桌面平台参数（与 UA 配套，身份必须一致）', () => {
+  const q = buildDirectQuery(IDENTITY)
+  // 实测：web_platform=desktop + DoubaoDesktop UA 才有正常正文；
+  // web_platform=web + 桌面版本号混搭会撞风控 710022004
+  assert.ok(q.includes('web_platform=desktop'))
+  assert.ok(q.includes('aid=497858'))
+  assert.ok(q.includes('device_platform=web'))
+  assert.ok(q.includes('samantha_web=1'))
+  assert.ok(q.includes('use-olympus-account=1'))
+})
+
+test('buildDirectQuery 带设备身份时写入 device_id / fp / web_id', () => {
   const q = buildDirectQuery(IDENTITY)
   assert.ok(q.includes(`device_id=${IDENTITY.deviceId}`))
   assert.ok(q.includes(`fp=verify_${IDENTITY.deviceId}`))
   assert.ok(q.includes(`web_id=${IDENTITY.webId}`))
-  assert.ok(q.includes('client_platform=pc_client'))
-  assert.ok(q.includes(`aid=${CHAT_AID}`))
-  assert.ok(q.includes(`pc_version=${IDENTITY.clientVersion}`))
-  // 一次性参数不该混进来（a_bogus / msToken 是签名桥的事）
-  assert.ok(!q.includes('a_bogus'))
-  assert.ok(!q.includes('msToken'))
 })
 
-test('buildDirectQuery 每次生成新 web_tab_id', () => {
-  const a = buildDirectQuery(IDENTITY)
-  const b = buildDirectQuery(IDENTITY)
-  const tabA = /web_tab_id=([^&]+)/.exec(a)[1]
-  const tabB = /web_tab_id=([^&]+)/.exec(b)[1]
-  assert.notEqual(tabA, tabB)
+test('buildDirectQuery 没有设备身份时不编造 device_id（风控按它聚合）', () => {
+  const q = buildDirectQuery(undefined)
+  assert.ok(q.includes('device_id='))
+  assert.ok(!q.includes('device_id=7000'))
+  assert.ok(q.includes('fp='))
 })
+
+test('buildDirectQuery 的 web_tab_id 固定为 0（实测那组参数）', () => {
+  const q = buildDirectQuery(IDENTITY)
+  assert.ok(q.includes('web_tab_id=0'))
+})
+
 
 /* ===== headers ===== */
 

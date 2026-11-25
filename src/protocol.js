@@ -1,25 +1,121 @@
 /**
- * 豆包网页协议的纯逻辑层：请求体构建、SSE 解析、工具调用抽取。
+ * 豆包网页协议的纯逻辑层：请求体构建、SSE 解析、工具调用抽取、模型目录。
  *
  * 这一层不碰网络、不碰浏览器，因此可以离线单测。所有"没对上"的协议帧都会落到
  * `unknownEvents` 里，不会静默变成空回复。
  *
+ * ## 模型目录
+ *
+ * 目录来自 [dsh-plugin-doubao](https://github.com/woc-jpg/dsh-plugin-doubao)（MIT）
+ * 在 2026-11-19 实测读到的豆包菜单清单（`/alice/slot/action_bar_v3/brief_list`）。
+ * 每个模型带：
+ * - `itemKey`：上线路由键（请求里 `model_item_key` 就是它）；
+ * - `modeId`/`agentMode`/`convMode`：请求形态的三元组（**必须整体一致**——
+ *   客户端切换模型时这三个一起变；只改一个会让上游按错的形态应答）；
+ * - `effort`：思考档位（豆包每模型的档位不同：GLM 是 3/5/7，Qwen 是 3/5/6，
+ *   统一成 3/4/5 会出现"模型拒绝该档位"）；
+ * - `extraParams`：`model_extra_params`，要**原样转发**——它告诉服务端预留多少内存。
+ *
+ * 有客户端（能从 `Local State` 读到 device_id）时可以动态拉取菜单刷新这份表；
+ * 没有客户端时用这份快照，保证选择器永远不为空。
+ *
  * @module src/protocol.js
  */
 
-/**
- * 已知模型档案。`itemKey` 来自豆包工作台的路由键，不是火山方舟的 model id。
- * `name` 是模型选择器里显示的名字，`desc` 是副标题，`contextWindow` 是上下文容量。
- */
+/** 已知模型档案（快照 2026-11-19，共 16 个）。 */
 export const MODELS = {
-  'doubao-pro-chat': { kind: 'chat', name: '豆包', desc: '豆包主对话（默认）', contextWindow: 131_072 },
-  'doubao-lite': { kind: 'chat', name: '豆包 Lite', itemKey: 'seed-lite-7b', desc: '轻量快速', contextWindow: 131_072 },
-  'doubao-work-auto': { kind: 'chat', name: '豆包工作 · 自动', itemKey: '9', workspace: true, desc: '豆包工作自动路由（会员额度）', contextWindow: 262_144 },
-  'doubao-2.1-pro': { kind: 'chat', name: '豆包 2.1 Pro', itemKey: '5', workspace: true, desc: '豆包 2.1 Pro（会员额度）', contextWindow: 262_144 },
-  'deepseek-v4.1-flash': { kind: 'chat', name: 'DeepSeek V4.1 Flash', itemKey: 'person-deepseek-v4-1-flash-261017', workspace: true, desc: '豆包工作里的 DeepSeek V4.1', contextWindow: 262_144 },
-  'kimi-k3': { kind: 'chat', name: 'Kimi K3', itemKey: 'person-kimi-k3-261111', workspace: true, desc: '豆包工作里的 Kimi K3', contextWindow: 262_144 },
-  'glm-5.3': { kind: 'chat', name: 'GLM 5.3', itemKey: 'person-glm-5-3-261111', workspace: true, desc: '豆包工作里的 GLM 5.3', contextWindow: 262_144 },
+  'doubao': {
+    kind: 'chat', itemKey: '0', name: '豆包', desc: '豆包快速',
+    modeId: '1', agentMode: 2, convMode: 1, effort: 3, deepThink: 0,
+    levels: [3, 4, 5], extraParams: undefined, contextWindow: 131_072,
+  },
+  'doubao-expert': {
+    kind: 'chat', itemKey: '3', name: '豆包 专家', desc: '豆包专家模式',
+    modeId: '1', agentMode: 2, convMode: 1, effort: 3, deepThink: 1,
+    levels: [3, 4, 5], extraParams: undefined, contextWindow: 131_072,
+  },
+  'doubao-auto': {
+    kind: 'chat', itemKey: '9', name: '豆包 自动', desc: '豆包工作自动路由（会员额度）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 9,
+    levels: [3, 4, 5], extraParams: { total_window_size: '256000' }, contextWindow: 256_000,
+  },
+  'doubao-2.1-lite': {
+    kind: 'chat', itemKey: 'seed-lite-7b', name: '豆包 2.1 Lite', desc: '轻量（限时优惠 0.01x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 4, 5], extraParams: { memory_profile: '256k', total_window_size: '256000' }, contextWindow: 256_000,
+  },
+  'doubao-2.1-pro': {
+    kind: 'chat', itemKey: '5', name: '豆包 2.1 Pro', desc: '豆包 2.1 Pro（0.65x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 5,
+    levels: [3, 4, 5], extraParams: { total_window_size: '256000' }, contextWindow: 256_000,
+  },
+  'deepseek-v4.1-flash': {
+    kind: 'chat', itemKey: 'person-deepseek-v4-1-flash-261017', name: 'DeepSeek V4.1 Flash',
+    desc: '豆包里的 DeepSeek（限时优惠 0.01x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 4, 5, 6, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'qwen4-max': {
+    kind: 'chat', itemKey: 'person-qwen4-max', name: 'Qwen 4 Max', desc: '豆包里的 Qwen',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 5, 6],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'kimi-k3.1-pro': {
+    kind: 'chat', itemKey: 'person-kimi-k3-1-pro-261111', name: 'Kimi K3.1 Pro', desc: '豆包里的 Kimi（0.95x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 4, 5, 6, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'kimi-k3.1-pro-highspeed': {
+    kind: 'chat', itemKey: 'person-kimi-k3-1-pro-highspeed-261111', name: 'Kimi K3.1 Pro 高速',
+    desc: '豆包里的 Kimi 高速（1.44x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 4, 5, 6, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'kimi-k3': {
+    kind: 'chat', itemKey: 'person-kimi-k3-261111', name: 'Kimi K3', desc: '豆包里的 Kimi（1.48x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 4, 5, 6, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'glm-5.3': {
+    kind: 'chat', itemKey: 'person-glm-5-3-261111', name: 'GLM 5.3', desc: '豆包里的 GLM（0.80x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 8,
+    levels: [3, 5, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'glm-5.3-flash': {
+    kind: 'chat', itemKey: 'person-glm-5-3-flash-261111', name: 'GLM 5.3 Flash', desc: '豆包里的 GLM 极速（0.08x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 8,
+    levels: [3, 5, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'deepseek-v4-pro': {
+    kind: 'chat', itemKey: 'person-deepseek-v4-pro-ga-260813', name: 'DeepSeek V4 Pro',
+    desc: '豆包里的 DeepSeek Pro（0.46x）',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 4, 5, 6, 7],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'qwen3.8-max': {
+    kind: 'chat', itemKey: 'person-qwen3-8-max', name: 'Qwen 3.8 Max', desc: '豆包里的 Qwen 3.8',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 5, 6],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
+  'qwen3.8-flash': {
+    kind: 'chat', itemKey: 'person-qwen3-8-flash', name: 'Qwen 3.8 Flash', desc: '豆包里的 Qwen 3.8 极速',
+    modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 4,
+    levels: [3, 5, 6],
+    extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
+  },
 }
+
+/** 默认模型（对话面、速度最快）。 */
+export const DEFAULT_MODEL = 'doubao'
 
 /** 默认路由用的 bot id。 */
 export const DEFAULT_BOT_ID = '7338286299411103781'
@@ -89,48 +185,85 @@ export function buildChatBody(req) {
   if (req.toolPrompt) prompt = `${req.toolPrompt}\n\n${prompt}`
 
   const conversationId = req.conversationId || newConversationId()
+
+  // 请求体形状：**content_block 块结构**（实测 2026-11 唯一可用的形态）。
+  // 早先用 messages[].content 字符串 + completion_option，豆包网关一律回
+  // 710020202 common invalid param —— 它认的是 block 结构。
+  //
+  // modeId / agentMode / convMode / effort 是**模型形态四元组**，必须整体一致
+  // （客户端切换模型时这四个一起变）；extraParams（model_extra_params）要原样转发。
+  const key = profile.itemKey ?? '0'
+  const modeId = profile.modeId ?? '1'
+  const agentMode = profile.agentMode ?? 2
+  const convMode = profile.convMode ?? 1
+  const effort = String(profile.effort ?? req.reasoningEffort ?? '3')
+  const deepThink = profile.deepThink ?? 0
+
   const body = {
+    client_meta: {
+      local_conversation_id: `local_${conversationId.replace(/-/g, '').slice(0, 16)}`,
+      conversation_id: conversationId,
+      bot_id: DEFAULT_BOT_ID,
+      last_section_id: '',
+      last_message_index: null,
+    },
     messages: [
       {
-        content: JSON.stringify({ text: prompt }),
-        content_type: 2001,
-        attachments: [],
-        references: [],
-        role: 'user',
+        local_message_id: globalThis.crypto.randomUUID(),
+        content_block: [
+          {
+            block_type: 10000,
+            content: {
+              text_block: { text: prompt, icon_url: '', icon_url_dark: '', summary: '' },
+              pc_event_block: '',
+            },
+            block_id: globalThis.crypto.randomUUID(),
+            parent_id: '',
+            meta_info: [],
+            extra_info: {},
+            append_fields: [],
+          },
+        ],
+        message_status: 0,
       },
     ],
-    completion_option: {
-      is_regen: false,
-      with_suggest: false,
+    option: {
+      agent_mode: agentMode,
+      need_deep_think: deepThink,
+      scene_type: 0,
       need_create_conversation: !req.conversationId,
-      launch_stage: 1,
-      is_replace: false,
-      is_delete: false,
-      is_zen: false,
-      use_deep_think: false,
-      use_auto_think: false,
-      use_truncate: false,
+      conversation_init_option: { need_ack_conversation: true },
+      conversation_init_ext: { model_item_key: key, reasoning_effort: effort, mode_id: modeId },
+      sse_recv_event_options: { support_chunk_delta: true },
+      support_lazy_fetch_stream: true,
+      is_old_user: true,
+      mention_skill_list: '[]',
+      mention_plugin_list: '[]',
+      mention_ext: '[{}]',
+      conversation_mode: convMode,
+      mode_id: modeId,
+      model_item_key: key,
+      agent_mode: String(agentMode),
+      reasoning_effort: effort,
+      provider_id: '',
     },
-    conversation_id: conversationId,
-    local_conversation_id: `local_${conversationId}`,
-    local_message_id: globalThis.crypto.randomUUID(),
-    bot_id: DEFAULT_BOT_ID,
-    evaluate_options: {},
-    section_options: {},
+    conversation_mode: convMode,
+    unique_key: globalThis.crypto.randomUUID(),
+    user_context: [],
+    ext: {
+      agent_mode: String(agentMode),
+      use_deep_think: String(deepThink),
+      sub_conv_firstmet_type: '1',
+      collection_id: '',
+      is_finish: '1',
+      conversation_init_option: '{"need_ack_conversation":true}',
+      commerce_credit_config_enable: '0',
+    },
   }
 
-  const option = body.completion_option
-  if (profile.workspace) {
-    option.agent_mode = 1
-    option.conversation_mode = 1
-    option.reasoning_effort = req.reasoningEffort || 'medium'
-    body.conversation_init_ext = { agent_mode: 1, model_item_key: profile.itemKey ?? '' }
-    body.model_config = { model_item_key: profile.itemKey ?? '' }
-    body.aggregate_params = { model_item_key: profile.itemKey ?? '' }
-  } else if (profile.itemKey) {
-    body.model_config = { model_item_key: profile.itemKey }
-  } else {
-    option.need_deep_think = Boolean(req.deepThink)
+  // model_extra_params 原样转发——它告诉服务端预留多少内存（不转发会被压到小窗口）
+  if (profile.extraParams) {
+    body.model_extra_params = { ...profile.extraParams }
   }
 
   return body
@@ -138,6 +271,20 @@ export function buildChatBody(req) {
 
 /**
  * 解析一行 SSE。
+ *
+ * **实测格式（2026-11-25，带真实凭据抓的帧）**：豆包的正文不是
+ * `event_data.message.content`，而是**补丁式增量**：
+ *
+ * ```
+ * event: STREAM_CHUNK
+ * data: {"patch_op":[{"patch_object":1,"patch_type":1,"patch_value":{"content_block":[
+ *   {"block_type":10000,"block_id":"...","content":{"text_block":{"text":"好"}},"is_finish":false}]}}]}
+ * ```
+ *
+ * `block_type` 10000 = 正文，10040 = 思考容器（其子块是正文时另算）。
+ * 早先只认 `event_data.message.content` 的解析器在这种帧上**返回空**——
+ * 所以聊天"没反应"的根因在这里。
+ *
  * @param {string} line - 一行原文。
  * @returns {{kind: 'text'|'think'|'done'|'unknown', text?: string, raw?: object}|null} 事件；非数据行返回 null。
  */
@@ -157,6 +304,46 @@ export function parseSseLine(line) {
     return /^[{[]/.test(s) ? { kind: 'unknown', raw: { unparsed: s.slice(0, 500) } } : { kind: 'text', text: s }
   }
   if (!payload || typeof payload !== 'object') return { kind: 'unknown', raw: { payload } }
+
+  // ── 补丁式增量（实测形态：STREAM_CHUNK）──
+  const ops = payload.patch_op ?? payload.patchOp
+  if (Array.isArray(ops) && ops.length > 0) {
+    let text = ''
+    let think = ''
+    for (const op of ops) {
+      const value = op?.patch_value ?? op?.patchValue ?? op
+      const blocks = value?.content_block ?? value?.contentBlock ?? []
+      for (const b of Array.isArray(blocks) ? blocks : [blocks]) {
+        const type = b?.block_type ?? b?.blockType
+        const t = b?.content?.text_block?.text ?? b?.content?.textBlock?.text
+        if (typeof t !== 'string' || !t) continue
+        // 10040 = 思考容器（其内容是思考摘要）；10000 = 正文
+        if (type === 10040) think += t
+        else text += t
+      }
+    }
+    if (think) return { kind: 'think', text: think, raw: payload }
+    if (text) return { kind: 'text', text, raw: payload }
+    return { kind: 'unknown', raw: payload }
+  }
+
+  // ── 直接的 content_block 结构（实测形态：STREAM_MSG_NOTIFY）──
+  //   {"content":{"content_block":[{"block_type":10000,"content":{"text_block":{"text":"你"}}}]}}
+  const directBlocks = payload.content?.content_block ?? payload.content_block
+  if (Array.isArray(directBlocks) && directBlocks.length > 0) {
+    let text = ''
+    let think = ''
+    for (const b of directBlocks) {
+      const type = b?.block_type ?? b?.blockType
+      const t = b?.content?.text_block?.text ?? b?.content?.textBlock?.text
+      if (typeof t !== 'string' || !t) continue
+      if (type === 10040) think += t
+      else text += t
+    }
+    if (think) return { kind: 'think', text: think, raw: payload }
+    if (text) return { kind: 'text', text, raw: payload }
+    return { kind: 'unknown', raw: payload }
+  }
 
   let data = payload.event_data ?? payload.eventData ?? payload.data
   if (typeof data === 'string' && data.trimStart().startsWith('{')) {

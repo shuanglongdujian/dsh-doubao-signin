@@ -22,7 +22,7 @@ import { createDoubaoAdapter, PROVIDER } from '../src/doubao-adapter.js'
 function makeAdapter(sse, opts = {}) {
   const calls = []
   const adapter = createDoubaoAdapter({
-    config: { defaultModel: 'doubao-pro-chat', directFirst: false, ...opts.config },
+    config: { defaultModel: 'doubao', directFirst: false, ...opts.config },
     getIdentity: () => ({ found: false }),
     cookieSource: async () => ({ header: '', source: 'none', ready: false }),
     ensureSigner: async () => ({
@@ -68,23 +68,19 @@ test('listModels 非空且 provider 匹配（空数组会被选择器过滤）',
 
 test('resolveModel 给上下文窗口', async () => {
   const { adapter } = makeAdapter('')
-  const r = await adapter.resolveModel('doubao', 'doubao-pro-chat')
+  const r = await adapter.resolveModel('doubao', 'doubao')
   assert.equal(r.provider, 'doubao')
-  assert.equal(r.id, 'doubao-pro-chat')
+  assert.equal(r.id, 'doubao')
   assert.ok(r.context.contextWindow >= 32768)
 })
 
 test('stream：普通对话产出 text 块，usage 在 finish 前，finish 最后', async () => {
   const sse = [
-    'data: {"event_data":{"message":{"content":"你好","content_type":2001}}}',
-    '',
-    'data: {"event_data":{"message":{"content":"世界","content_type":2001}}}',
-    '',
-    'data: [DONE]',
+    'data: {"message_id":"63015907524239874","patch_op":[{"patch_object":1,"patch_type":1,"patch_value":{"content_block":[{"block_type":10000,"block_id":"10715424070609922","content":{"text_block":{"text":"好"}},"is_finish":false,"patch_type":1}]}}]}',
     '',
   ].join('\n')
   const { adapter } = makeAdapter(sse)
-  const chunks = await collect(adapter.stream({ model: 'doubao-pro-chat', messages: [{ role: 'user', content: 'hi' }] }))
+  const chunks = await collect(adapter.stream({ model: 'doubao', messages: [{ role: 'user', content: 'hi' }] }))
 
   assert.ok(chunks.length >= 4)
   assert.equal(chunks[chunks.length - 1].type, 'finish')
@@ -99,30 +95,32 @@ test('stream：普通对话产出 text 块，usage 在 finish 前，finish 最�
   assert.deepEqual(starts, ends, 'block-start 与 block-end 的 index 必须成对')
   // 文本内容完整
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
-  assert.equal(text, '你好世界')
+  assert.equal(text, '好')
 })
 
 test('stream：思考内容产出 reasoning 块', async () => {
   const sse = [
-    'data: {"event_data":{"message":{"content":"思考中","content_type":2006}}}',
+    'data: {"patch_op":[{"patch_value":{"content_block":[{"block_type":10040,"content":{"text_block":{"text":"想一下"}}}]}}]}',
     '',
-    'data: {"event_data":{"message":{"content":"答案","content_type":2001}}}',
+    'data: {"message_id":"63015907524239874","patch_op":[{"patch_object":1,"patch_type":1,"patch_value":{"content_block":[{"block_type":10000,"block_id":"10715424070609922","content":{"text_block":{"text":"好"}},"is_finish":false,"patch_type":1}]}}]}',
     '',
   ].join('\n')
   const { adapter } = makeAdapter(sse)
-  const chunks = await collect(adapter.stream({ model: 'doubao-pro-chat', messages: [] }))
+  const chunks = await collect(adapter.stream({ model: 'doubao', messages: [] }))
   assert.ok(chunks.some(c => c.type === 'reasoning-delta'))
   assert.ok(chunks.some(c => c.type === 'block-start' && c.blockType === 'reasoning'))
 })
 
 test('stream：工具调用产出 tool-call 块并以 tool-calls 收尾', async () => {
+  // 真实帧形态：补丁里的 text_block.text 带 <tool_call> 标记
+  const marker = '<tool_call>{"name":"shell","arguments":{"cmd":"ls"}}</tool_call>'
   const sse = [
-    'data: {"event_data":{"message":{"content":"<tool_call>{\\"name\\":\\"shell\\",\\"arguments\\":{\\"cmd\\":\\"ls\\"}}</tool_call>","content_type":2001}}}',
+    'data: {"patch_op":[{"patch_value":{"content_block":[{"block_type":10000,"content":{"text_block":{"text":' + JSON.stringify(marker) + '}}}]}}]}',
     '',
   ].join('\n')
   const { adapter } = makeAdapter(sse)
   const chunks = await collect(adapter.stream({
-    model: 'doubao-pro-chat',
+    model: 'doubao',
     messages: [{ role: 'user', content: '列文件' }],
     tools: [{ name: 'shell', description: 'run', parameters: { type: 'object', properties: {} } }],
   }))
@@ -139,7 +137,7 @@ test('stream：风控错误 710022004 抛出可读异常', async () => {
   const sse = 'event: STREAM_ERROR\ndata: {"error_code":710022004,"error_msg":"rate limited"}\n'
   const { adapter } = makeAdapter(sse)
   await assert.rejects(
-    () => collect(adapter.stream({ model: 'doubao-pro-chat', messages: [] })),
+    () => collect(adapter.stream({ model: 'doubao', messages: [] })),
     /710022004|人机验证/,
   )
 })
@@ -147,11 +145,11 @@ test('stream：风控错误 710022004 抛出可读异常', async () => {
 test('stream：system 消息被前置进 messages', async () => {
   const { adapter, calls } = makeAdapter('data: [DONE]\n')
   await collect(adapter.stream({
-    model: 'doubao-pro-chat',
+    model: 'doubao',
     system: '你是助手',
     messages: [{ role: 'user', content: 'hi' }],
   }))
-  const sent = calls[0].body.messages[0].content
+  const sent = calls[0].body.messages[0].content_block[0].content.text_block.text
   assert.ok(sent.includes('你是助手'), 'system 应进入请求体')
   assert.ok(sent.includes('hi'))
 })

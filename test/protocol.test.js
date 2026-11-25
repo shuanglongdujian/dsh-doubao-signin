@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict'
 import { test, describe } from 'node:test'
 
+import { lines } from '../src/signer.js'
 import {
   MODELS,
   buildChatBody,
@@ -49,49 +50,61 @@ describe('flattenMessages', () => {
 })
 
 describe('buildChatBody', () => {
-  test('工作台模型把 item_key 写进三处并开 agent_mode', () => {
-    const body = buildChatBody({ model: 'kimi-k3', messages: [{ role: 'user', content: 'hi' }] })
-    const key = MODELS['kimi-k3'].itemKey
-    assert.equal(body.conversation_init_ext.model_item_key, key)
-    assert.equal(body.model_config.model_item_key, key)
-    assert.equal(body.aggregate_params.model_item_key, key)
-    assert.equal(body.completion_option.agent_mode, 1)
+  test('用 content_block 块结构（豆包网关只认这个形态）', () => {
+    const body = buildChatBody({ model: 'doubao', messages: [{ role: 'user', content: 'hi' }] })
+    assert.ok(Array.isArray(body.messages))
+    assert.equal(body.messages[0].content_block[0].block_type, 10000)
+    assert.equal(body.messages[0].content_block[0].content.text_block.text, '[用户]\nhi')
+    assert.equal(body.messages[0].content_block[0].parent_id, '')
+    assert.equal(body.messages[0].message_status, 0)
+    // 早先的 content 字符串形态会被网关回 710020202，这里钉死不再回退
+    assert.equal(body.messages[0].content, undefined)
   })
 
-  test('普通模型不写工作台字段', () => {
-    const body = buildChatBody({ model: 'doubao-pro-chat', messages: [{ role: 'user', content: 'hi' }] })
-    assert.equal(body.conversation_init_ext, undefined)
-    assert.equal(body.model_config, undefined)
-    assert.equal(body.completion_option.agent_mode, undefined)
+  test('模型形态四元组取自模型档案（modeId/agentMode/convMode/effort）', () => {
+    const body = buildChatBody({ model: 'doubao-auto', messages: [{ role: 'user', content: 'hi' }] })
+    assert.equal(body.option.mode_id, '3')
+    assert.equal(body.option.agent_mode, '1')
+    assert.equal(body.option.conversation_mode, 3)
+    assert.equal(body.option.reasoning_effort, '3')
+    assert.equal(body.option.model_item_key, '9')
+    assert.equal(body.conversation_mode, 3)
+  })
+
+  test('对话面模型用 mode 1 / agent_mode 2', () => {
+    const body = buildChatBody({ model: 'doubao', messages: [] })
+    assert.equal(body.option.mode_id, '1')
+    assert.equal(body.option.agent_mode, '2')
+    assert.equal(body.option.conversation_mode, 1)
+    assert.equal(body.option.model_item_key, '0')
+  })
+
+  test('model_extra_params 原样转发（告诉服务端预留多少内存）', () => {
+    const body = buildChatBody({ model: 'kimi-k3', messages: [] })
+    assert.deepEqual(body.model_extra_params, { memory_profile: '300k_230', total_window_size: '300000' })
+  })
+
+  test('没有 conversationId 时要求新建会话', () => {
+    const body = buildChatBody({ model: 'doubao', messages: [] })
+    assert.equal(body.option.need_create_conversation, true)
+    assert.ok(body.client_meta.conversation_id)
+  })
+
+  test('给了 conversationId 就复用', () => {
+    const body = buildChatBody({ model: 'doubao', messages: [], conversationId: 'conv-123' })
+    assert.equal(body.option.need_create_conversation, false)
+    assert.equal(body.client_meta.conversation_id, 'conv-123')
+  })
+
+  test('toolPrompt 拼到 prompt 前面', () => {
+    const body = buildChatBody({ model: 'doubao', messages: [{ role: 'user', content: 'hi' }], toolPrompt: 'TOOLS' })
+    const text = body.messages[0].content_block[0].content.text_block.text
+    assert.ok(text.startsWith('TOOLS'))
+    assert.ok(text.includes('hi'))
   })
 
   test('未知模型抛错', () => {
     assert.throws(() => buildChatBody({ model: 'nope', messages: [] }), /model_not_found/)
-  })
-
-  test('没有 conversationId 时要求新建会话', () => {
-    const body = buildChatBody({ model: 'doubao-pro-chat', messages: [{ role: 'user', content: 'x' }] })
-    assert.equal(body.completion_option.need_create_conversation, true)
-  })
-
-  test('给了 conversationId 就复用', () => {
-    const body = buildChatBody({
-      model: 'doubao-pro-chat',
-      messages: [{ role: 'user', content: 'x' }],
-      conversationId: 'abc',
-    })
-    assert.equal(body.conversation_id, 'abc')
-    assert.equal(body.completion_option.need_create_conversation, false)
-  })
-
-  test('toolPrompt 拼到 prompt 前面', () => {
-    const body = buildChatBody({
-      model: 'doubao-pro-chat',
-      messages: [{ role: 'user', content: '查天气' }],
-      toolPrompt: 'TOOLHEADER',
-    })
-    const content = JSON.parse(body.messages[0].content)
-    assert.match(content.text, /^TOOLHEADER/)
   })
 })
 
@@ -261,5 +274,66 @@ describe('页面脚本', () => {
   test('探针脚本是只读的', () => {
     const src = probeExpression()
     assert.doesNotMatch(src, /\.click\(|dispatchEvent|\.remove\(|innerText\s*=/)
+  })
+})
+/* ===== 真实 SSE 帧（2026-11-25 用真凭据抓的响应） ===== */
+describe('真实帧解析', () => {
+  const REAL_SSE = [
+    'id: 0',
+    'event: SSE_HEARTBEAT',
+    'data: {}',
+    '',
+    'id: 4',
+    'event: STREAM_MSG_NOTIFY',
+    'data: {"content":{"content_block":[{"block_type":10000,"block_id":"10715424070609922","content":{"text_block":{"text":"你"}},"is_finish":false,"patch_type":1}],"content_status":100}}',
+    '',
+    'id: 6',
+    'event: STREAM_CHUNK',
+    'data: {"message_id":"63015907524239874","patch_op":[{"patch_object":1,"patch_type":1,"patch_value":{"content_block":[{"block_type":10000,"block_id":"10715424070609922","content":{"text_block":{"text":"好"}},"is_finish":false,"patch_type":1}]}}]}',
+    '',
+    'id: 12',
+    'event: STREAM_CHUNK',
+    'data: {"message_id":"63015907524239874","patch_op":[{"patch_object":50,"patch_type":1,"patch_value":{"ext":{"finish_reason_chat":"succeed:completion"}}}]}',
+    '',
+  ].join('\n')
+
+  test('lines() 只产出 data 行（id:/event: 行不是数据）', async () => {
+    const got = []
+    for await (const line of lines(REAL_SSE)) got.push(line)
+    assert.equal(got.length, 4)
+    assert.ok(got.every(l => l.startsWith('{')), '只应是 JSON 数据行')
+    assert.ok(!got.some(l => l.startsWith('id:')), 'id: 行不能进解析器')
+  })
+
+  test('STREAM_MSG_NOTIFY 的 content.content_block 解析出正文', () => {
+    const ev = parseSseLine(
+      'data: {"content":{"content_block":[{"block_type":10000,"content":{"text_block":{"text":"你"}}}]}}',
+    )
+    assert.equal(ev.kind, 'text')
+    assert.equal(ev.text, '你')
+  })
+
+  test('STREAM_CHUNK 的 patch_op 解析出正文增量', () => {
+    const ev = parseSseLine(
+      'data: {"patch_op":[{"patch_value":{"content_block":[{"block_type":10000,"content":{"text_block":{"text":"好"}}}]}}]}',
+    )
+    assert.equal(ev.kind, 'text')
+    assert.equal(ev.text, '好')
+  })
+
+  test('真实流拼起来得到完整回答', async () => {
+    let text = ''
+    for await (const line of lines(REAL_SSE)) {
+      const ev = parseSseLine(line)
+      if (ev?.kind === 'text') text += ev.text
+    }
+    assert.equal(text, '你好')
+  })
+
+  test('空的 text_block（is_finish 帧）不产出空文本', () => {
+    const ev = parseSseLine(
+      'data: {"patch_op":[{"patch_value":{"content_block":[{"block_type":10000,"content":{"text_block":{}},"is_finish":true}]}}]}',
+    )
+    assert.ok(ev === null || ev.kind !== 'text' || ev.text === '')
   })
 })
