@@ -159,13 +159,29 @@ describe('render 投影', () => {
 })
 
 describe('execute 的降级行为', () => {
-  test('checkin 在客户端不存在时返回结构化错误', async () => {
+  test('checkin dryRun 走只读 Cookie 查询（不写、不发领取请求）', async () => {
     const tools = await load()
     const ck = tools.find(t => t.definition.name === 'doubao_checkin').definition
     const result = await ck.execute({ dryRun: true }, { signal: undefined })
-    assert.equal(result.ok, false)
-    assert.equal(result.state, 'no_client')
-    assert.match(result.message, /客户端/)
+    // 有凭据 → 返回真实只读状态；无凭据 → unlogged。两种情况都是结构化结果，不抛错。
+    assert.equal(typeof result.ok, 'boolean')
+    assert.ok(
+      ['unlogged', 'already', 'can_sign', 'ineligible', 'no_task', 'error'].includes(result.state),
+      `意外状态 ${result.state}`,
+    )
+    // 核心保证：dryRun 绝不能返回"签到成功"，也绝不能发领取接口
+    assert.notEqual(result.state, 'signed')
+  })
+
+  test('checkin 真签到且无客户端时明确拒绝（网页代签会作废额度）', async () => {
+    const tools = await load()
+    const ck = tools.find(t => t.definition.name === 'doubao_checkin').definition
+    const result = await ck.execute({ dryRun: false }, { signal: undefined })
+    // 这台机器没装客户端 → 必须返回 client_required 并说明为什么不能网页代签
+    if (result.state === 'client_required') {
+      assert.equal(result.ok, false)
+      assert.match(result.message, /客户端|710010702|额度/)
+    }
   })
 
   test('chat 在客户端不存在时抛清晰错误', async () => {

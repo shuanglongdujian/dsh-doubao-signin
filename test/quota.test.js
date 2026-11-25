@@ -87,3 +87,69 @@ test('renderQuota 输出人类可读多行', () => {
   assert.ok(text.includes('套餐积分'))
   assert.ok(text.includes('重置'))
 })
+
+/* ===== 豆包 2026-11 改版后的真实响应结构（实测抓包） ===== */
+const REAL_2026_11 = {
+  data: {
+    current_subscription: { product_name: '个人订阅', status: 3 },
+    quota_remaining_amount: '3,921',
+    quota_blance_usage: [
+      { category: 1, title: '套餐', total_amount: '9,000', used_amount: '5,079', used_percent: 56 },
+    ],
+    window_limit_section: {
+      entitlement_count: 0,
+      usage_exhausted: false,
+      window_limit_groups: [
+        {
+          feature_group: 'monthly_quota',
+          window_limits: [
+            {
+              end_time: 1795793522669,
+              item_type: 1,
+              start_time: 0,
+              total_amount: '9,000',
+              used_amount: '5,079',
+              used_percent: 56,
+              window_type: 4,
+            },
+          ],
+        },
+      ],
+    },
+  },
+}
+
+test('2026-11 新结构：从 window_limit_section 里解析出月度套餐', () => {
+  const r = parseQuotaSummary(REAL_2026_11)
+  assert.ok(r, '新结构必须能解析（不能因为顶层没有 window_limit_groups 就 undefined）')
+  assert.equal(r.windows.length, 1)
+  assert.equal(r.windows[0].name, '套餐积分')
+  assert.equal(r.windows[0].total, 9000, '"9,000" 必须去千分位')
+  assert.equal(r.windows[0].used, 5079)
+  assert.equal(r.windows[0].remaining, 3921)
+  assert.ok(r.windows[0].resetsAt > Date.now())
+})
+
+test('2026-11 新结构：total 用上游 quota_remaining_amount（权威，带千分位）', () => {
+  const r = parseQuotaSummary(REAL_2026_11)
+  assert.equal(r.total, 3921, '"3,921" 必须解析成 3921')
+})
+
+test('2026-11 新结构：只有 quota_blance_usage 时也能兜底解析', () => {
+  const r = parseQuotaSummary({ data: {
+    quota_blance_usage: [{ title: '活动赠送', total_amount: '880', used_amount: '200' }],
+  } })
+  assert.ok(r)
+  assert.equal(r.windows.length, 1)
+  assert.equal(r.windows[0].name, '活动赠送')
+  assert.equal(r.windows[0].remaining, 680)
+  assert.equal(r.total, 680)
+})
+
+test('千分位字符串不产生 NaN', () => {
+  const r = parseQuotaSummary({ data: {
+    quota_blance_usage: [{ title: 'A', total_amount: '1,234,567', used_amount: '1,000' }],
+  } })
+  assert.equal(r.windows[0].total, 1234567)
+  assert.ok(Number.isFinite(r.windows[0].remaining))
+})

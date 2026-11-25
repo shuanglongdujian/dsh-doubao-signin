@@ -79,11 +79,15 @@ assert.equal(typeof result.summary, 'string')
 assert.ok(result.summary.length > 0)
 console.log('\nstatus 实跑结果:\n' + result.summary)
 
-// checkin 缺客户端时给结构化错误
+// checkin dryRun：只读 Cookie 查询，有凭据时返回真实状态，无凭据时 unlogged——都不抛错、绝不做写操作
 const checkin = registered.get('doubao_checkin')
 const ck = await checkin.execute({ dryRun: true }, { signal: new AbortController().signal })
-assert.equal(ck.ok, false)
-assert.equal(ck.state, 'no_client')
+assert.equal(typeof ck.ok, 'boolean')
+assert.ok(
+  ['unlogged', 'already', 'can_sign', 'ineligible', 'no_task', 'error'].includes(ck.state),
+  `意外状态 ${ck.state}`,
+)
+assert.notEqual(ck.state, 'signed', 'dryRun 绝不能返回签到成功')
 console.log(`\ncheckin 实跑状态: [${ck.state}] ${ck.message}`)
 
 // chat 缺客户端时抛清晰错误

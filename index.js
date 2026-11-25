@@ -502,10 +502,10 @@ export async function apply(ctx, rawConfig = {}) {
     name: 'doubao_checkin',
     description:
       '领取豆包「天天领额度」的每日签到（平日 200 额度，周一翻倍）。'
-      + '通过 CDP 点击客户端界面上的真实签到按钮完成，签名由客户端自己算，'
-      + '因此不会把聊天用的账号风控打进冷却。已签到时直接返回，不重复点击。'
-      + 'relaunchClient 打开时会重启正在运行的豆包客户端。'
-      + '不确定状态时先用 dryRun: true。',
+      + '**只能在豆包电脑版客户端点真实按钮**——网页会话代签会返回 710010702 并作废当天额度（实测，不可回滚），所以本工具绝不盲试接口。'
+      + 'dryRun: true 时用 Cookie 只读查询今天的签到状态（不需要客户端、绝对安全）。'
+      + '真签到时若无客户端会明确告知原因；有客户端则通过 CDP 点击真实按钮，签名由客户端自己算。'
+      + 'relaunchClient 打开时会重启正在运行的豆包客户端。',
     parameters: CHECKIN_PARAMETERS,
     output: {
       schema: CHECKIN_OUTPUT,
@@ -533,10 +533,35 @@ export async function apply(ctx, rawConfig = {}) {
       }
     },
     async execute(args) {
+      // dryRun：用 Cookie 只读查状态（无客户端也能用，绝对不写）
+      if (args.dryRun === true) {
+        const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
+        if (!cookie.header) {
+          return { ok: false, state: 'unlogged', message: '没有登录凭据。先跑 doubao_login 扫码登录，再查签到状态。' }
+        }
+        const { querySigninStatus } = await import('./src/signin-status.js')
+        return querySigninStatus(cookie.header)
+      }
+
+      // 真签到：只允许走客户端真实 UI（CDP）
+      // 绝不发 /landing/checkin——网页代签返回 710010702 且作废当天额度，不可回滚。
+      try {
+        await findClient(args.exePath || config.exePath || undefined)
+      } catch {
+        return {
+          ok: false,
+          state: 'client_required',
+          message:
+            '签到只能在豆包电脑版客户端点真实按钮：网页会话代签会返回 710010702，'
+            + '并且会把你今天的签到机会作废（实测，不可补救）。'
+            + '请安装并登录豆包电脑版，然后我可以通过 CDP 帮你点按钮；'
+            + '或你自己去客户端点一下「免费领额度」。想先看今天签没签，用 dryRun: true。',
+        }
+      }
       return runCheckin({
         port: config.cdpPort,
         exePath: args.exePath || config.exePath || undefined,
-        dryRun: args.dryRun === true,
+        dryRun: false,
         relaunchClient: args.relaunchClient ?? config.relaunchClient,
         timeoutMs: args.timeoutMs ?? 25_000,
       })
@@ -598,15 +623,27 @@ export async function apply(ctx, rawConfig = {}) {
         }
       }
 
-      const checkin = await runCheckin({
-        port: config.cdpPort,
-        exePath: config.exePath || undefined,
-        dryRun: true,
-        relaunchClient: false,
-        timeoutMs: 8000,
-      }).catch(error => ({ ok: false, state: 'error', message: error.message }))
-
-      parts.push(`签到状态: [${checkin.state}] ${checkin.message}`)
+      // 签到状态优先用 Cookie 只读查询（不需要客户端，不发任何领取请求——
+      // 网页直接调领取接口会吃掉当天额度，这是实测结论，绝不能盲试）。
+      let checkin
+      const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
+      if (cookie.header) {
+        const { querySigninStatus } = await import('./src/signin-status.js')
+        checkin = await querySigninStatus(cookie.header).catch(error => ({
+          ok: false, state: 'error', message: error.message,
+        }))
+        parts.push(`签到状态: [${checkin.state}] ${checkin.message}（只读查询，来源：${cookie.source === 'saved' ? '扫码凭据' : '客户端'}）`)
+        parts.push('  注：签到领取只能在豆包电脑版客户端点真实按钮；网页代签会作废当天额度')
+      } else {
+        checkin = await runCheckin({
+          port: config.cdpPort,
+          exePath: config.exePath || undefined,
+          dryRun: true,
+          relaunchClient: false,
+          timeoutMs: 8000,
+        }).catch(error => ({ ok: false, state: 'error', message: error.message }))
+        parts.push(`签到状态: [${checkin.state}] ${checkin.message}（CDP 探测，无凭据）`)
+      }
 
       return {
         clientFound,
@@ -755,13 +792,25 @@ export async function apply(ctx, rawConfig = {}) {
             return { ok: false, summary: `读不了额度：${error.message}` }
           }
         },
-        runCheckin: async () => runCheckin({
-          port: config.cdpPort,
-          exePath: config.exePath || undefined,
-          dryRun: false,
-          relaunchClient: config.relaunchClient,
-          timeoutMs: 30_000,
-        }),
+        runCheckin: async () => {
+          // 只允许客户端真实 UI；没客户端明确拒绝，绝不发网页领取接口（会作废当天额度）
+          try {
+            await findClient(config.exePath || undefined)
+          } catch {
+            return {
+              ok: false,
+              state: 'client_required',
+              message: '签到只能在豆包电脑版客户端点真实按钮。网页代签会返回 710010702 并作废今天的额度（不可补救）。请先安装并登录客户端。',
+            }
+          }
+          return runCheckin({
+            port: config.cdpPort,
+            exePath: config.exePath || undefined,
+            dryRun: false,
+            relaunchClient: config.relaunchClient,
+            timeoutMs: 30_000,
+          })
+        },
         startLogin: async () => {
           if (loginTask) return loginState
           loginState = { phase: 'starting', message: '正在拉起浏览器…' }
