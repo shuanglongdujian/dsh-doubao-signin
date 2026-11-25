@@ -222,6 +222,9 @@ export async function loginWithBrowser(opts = {}) {
 
     conn = new CdpClient(page.webSocketDebuggerUrl)
     await conn.connect()
+    // Network.getCookies 是 browser-level 命令，通常不需要 enable；
+    // 但部分 Chromium 版本要求先开启 Network domain，否则返回空列表。
+    try { await conn.call('Network.enable') } catch { /* 不影响 getCookies */ }
     say('已连上页面，请在弹出的浏览器窗口里用抖音 App 扫码登录')
 
     // 轮询 cookie
@@ -229,7 +232,10 @@ export async function loginWithBrowser(opts = {}) {
     while (Date.now() < deadline) {
       try {
         const res = await conn.call('Network.getCookies', { urls: ['https://www.doubao.com', LOGIN_URL] })
-        cookies = (res?.result?.cookies ?? res?.cookies ?? []).filter(c => /doubao\.com$/i.test(String(c?.domain ?? '').replace(/^\./, '')))
+        // 核心会话 cookie 可能在 .doubao.com / www.doubao.com / passport.doubao.com
+        // 等任意子域，统一收进来（豆包域下才收，绝不收第三方 cookie）。
+        const isDoubao = domain => /(^|\.)doubao\.com$/i.test(String(domain ?? '').replace(/^\./, ''))
+        cookies = (res?.result?.cookies ?? res?.cookies ?? []).filter(c => isDoubao(c?.domain))
         const ready = sessionReadiness(cookies)
         if (ready.ok) {
           const file = saveCredentials(cookies.map(c => ({ name: c.name, value: c.value })))

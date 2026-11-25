@@ -715,8 +715,10 @@ export async function apply(ctx, rawConfig = {}) {
       let loginTask = null
       let loginState = { phase: 'idle' }
 
-      registerQuotaRoute(ctx, {
-        webServer,
+      // 注意：必须传 scoped（而不是外层 ctx）——effect 要挂在 inject fiber 上，
+      // webServer 被替换时回调重跑能正确清理旧路由，避免 duplicate route。
+      registerQuotaRoute(scoped, {
+        webServer: server,
         readQuota: async () => {
           try {
             const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))

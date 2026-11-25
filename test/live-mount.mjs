@@ -134,3 +134,25 @@ void DSH_ROOT
   )
   console.log('\n✅ webServer 路由用 ctx.inject 等待就绪（不是 ctx.get）')
 }
+
+/* ===== 第六遍：webServer inject 回调真实执行（防止 ReferenceError 被吞） ===== */
+{
+  // 真 cordis 会吞掉 inject 回调里的 ReferenceError（Fiber._reload catch），
+  // 所以静态源码断言不够——这里直接模拟 cordis 的 inject 触发，把回调跑一遍。
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  assert.ok(
+    /registerQuotaRoute\(scoped,\s*\{/.test(source),
+    'inject 回调里必须 registerQuotaRoute(scoped, {...})，且用 scoped 而非外层 ctx',
+  )
+  assert.ok(
+    /webServer:\s*server/.test(source),
+    'inject 回调里传的必须是已解析的 server（const server = scoped.webServer），不是裸标识符 webServer',
+  )
+  // 反向断言：回调作用域里不能出现裸的 `webServer,` 作为参数值
+  const cb = source.slice(source.indexOf("ctx.inject(['webServer']"), source.indexOf("ctx.inject(['webServer']") + 2500)
+  assert.ok(
+    !/^\s*webServer,\s*$/m.test(cb),
+    'inject 回调里不能有裸 webServer 标识符（ReferenceError 会被 cordis 吞掉）',
+  )
+  console.log('\n✅ webServer inject 回调作用域无未定义变量')
+}
