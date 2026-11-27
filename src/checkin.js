@@ -28,13 +28,14 @@ export const DEFAULT_PORT = 9222
 /**
  * 把页面探针结果映射成状态。
  * 纯函数，方便单测：不碰浏览器、不碰网络。
- * @param {{hasCard?: boolean, canSign?: boolean, loginWall?: boolean}} probe - 页面探针。
+ * @param {{hasCard?: boolean, canSign?: boolean, rewarded?: boolean, loginWall?: boolean}} probe - 页面探针。
  * @returns {{state: string, ok: boolean, message: string}} 状态判定。
  */
 export function decideState(probe) {
   if (probe?.hasCard) {
+    if (probe.rewarded) return { state: 'already', ok: true, message: '今日已签到' }
     if (probe.canSign) return { state: 'not_signed', ok: true, message: '未签到，存在可点击的签到按钮' }
-    return { state: 'already', ok: true, message: '今日已签到' }
+    return { state: 'unknown', ok: false, message: '找到了签到卡片，暂时无法确认今日的签到状态' }
   }
   if (probe?.loginWall) return { state: 'unlogged', ok: false, message: '页面出现登录墙，先在客户端里登录豆包' }
   return {
@@ -53,8 +54,9 @@ export function probeExpression() {
     const cards = [...document.querySelectorAll('[data-reward-code]')];
     const daily = cards.find(c => c.getAttribute('data-reward-code') === ${JSON.stringify(DAILY_REWARD_CODE)});
     const btns = daily ? [...daily.querySelectorAll('button, [role="button"]')] : [];
-    const clickable = btns.find(b => /立即签到|去签到|签到/.test(b.innerText || '') && !b.disabled);
-    const rewarded = daily ? daily.querySelector('[class*="rewarded"], [class*="checked"], svg[class*="check"]') : null;
+    const clickable = btns.find(b => /签到/.test(b.innerText || '') && !b.disabled && b.getAttribute('aria-disabled') !== 'true');
+    const rewarded = daily?.querySelector('[class^="rewarded-"], [class*=" rewarded-"], .rewarded')
+      || btns.some(b => /^(?:今日)?已签到$|^已领取$/.test((b.innerText || '').trim()));
     const loginWall = !!document.querySelector('[class*="login"], [class*="qrcode"], [class*="scan"]');
     return {
       hasCard: !!daily,
@@ -78,7 +80,7 @@ export function clickExpression() {
     const daily = cards.find(c => c.getAttribute('data-reward-code') === ${JSON.stringify(DAILY_REWARD_CODE)});
     if (!daily) return { clicked: false, reason: 'no_card' };
     const btn = [...daily.querySelectorAll('button, [role="button"]')]
-      .find(b => /立即签到|去签到|签到/.test(b.innerText || '') && !b.disabled);
+      .find(b => /签到/.test(b.innerText || '') && !b.disabled && b.getAttribute('aria-disabled') !== 'true');
     if (!btn) return { clicked: false, reason: 'no_button' };
     const r = btn.getBoundingClientRect();
     const opts = { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
@@ -424,19 +426,15 @@ async function drive(cdp, ctx) {
   let probe = {}
   while (Date.now() < deadline) {
     probe = (await cdp.evaluate(probeExpression())) ?? {}
-    if (probe.hasCard || probe.loginWall) break
+    if (probe.loginWall || (probe.hasCard && (probe.rewarded || probe.canSign))) break
     await sleep(1000)
   }
 
   const verdict = decideState(probe)
   const base = { client: ctx.exe, port: ctx.port, before: probe }
 
-  if (verdict.state === 'unlogged' || verdict.state === 'no_card') {
-    return { ok: false, ...verdict, ...base, after: null }
-  }
-  if (verdict.state === 'already') {
-    return { ok: true, ...verdict, ...base, after: probe }
-  }
+  if (!verdict.ok) return { ...verdict, ...base, after: null }
+  if (verdict.state === 'already') return { ...verdict, ...base, after: probe }
   if (ctx.dryRun) {
     return { ok: true, state: 'dry_run', message: 'dry-run：定位到可点的签到按钮，未点击', ...base, after: probe }
   }
@@ -444,19 +442,19 @@ async function drive(cdp, ctx) {
   const clicked = (await cdp.evaluate(clickExpression())) ?? {}
   let after = probe
   const settleDeadline = Date.now() + 12_000
-  while (Date.now() < settleDeadline) {
+  while (clicked.clicked && Date.now() < settleDeadline) {
     await sleep(1500)
     after = (await cdp.evaluate(probeExpression())) ?? after
-    if (!after.canSign) break
+    if (decideState(after).state === 'already') break
   }
 
-  if (clicked.clicked && !after.canSign) {
+  if (clicked.clicked && decideState(after).state === 'already') {
     return { ok: true, state: 'signed', message: '签到成功', ...base, after, clicked }
   }
   return {
     ok: false,
     state: 'error',
-    message: `点了但状态没变（clicked=${JSON.stringify(clicked)}）：可能被风控拦住，或需要真实鼠标事件`,
+    message: '客户端未显示签到成功，暂时无法确认此次签到结果',
     ...base,
     after,
     clicked,

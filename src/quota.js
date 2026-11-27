@@ -46,10 +46,11 @@ export function parseQuotaSummary(payload) {
 
   // 窗口可能在旧位置 root.window_limit_groups，也可能在新位置
   // root.window_limit_section.window_limit_groups（2026-11 改版后）。
-  const groups =
-    (Array.isArray(root?.window_limit_groups) && root.window_limit_groups) ||
-    (Array.isArray(root?.window_limit_section?.window_limit_groups) && root.window_limit_section.window_limit_groups) ||
-    []
+  const legacyGroups = root?.window_limit_groups
+  const currentGroups = root?.window_limit_section?.window_limit_groups
+  const groups = Array.isArray(legacyGroups) && legacyGroups.length > 0
+    ? legacyGroups
+    : Array.isArray(currentGroups) ? currentGroups : []
 
   const windows = []
   for (const g of groups) {
@@ -61,16 +62,17 @@ export function parseQuotaSummary(payload) {
     }
   }
 
-  // 新结构还有 quota_blance_usage（分类余额，无时间戳）——只在窗口数据为空时用它兜底，
-  // 避免和 window_limits 重复计数。
-  if (windows.length === 0 && Array.isArray(root?.quota_blance_usage)) {
+  // 分类余额没有时间戳，已有同类窗口时保留窗口，缺项时补上余额明细。
+  if (Array.isArray(root?.quota_blance_usage)) {
+    const windowNames = new Set(windows.map(w => quotaName(w.name)))
     for (const u of root.quota_blance_usage) {
       const total = num(u?.total_amount) ?? num(u?.total)
       const used = num(u?.used_amount) ?? num(u?.used)
-      if (total === undefined || used === undefined) continue
+      const name = typeof u?.title === 'string' && u.title.trim() ? u.title.trim() : '额度'
+      if (total === undefined || used === undefined || windowNames.has(quotaName(name))) continue
       windows.push({
         type: -1,
-        name: String(u?.title ?? '额度'),
+        name,
         total,
         used,
         remaining: Math.max(0, total - used),
@@ -79,14 +81,20 @@ export function parseQuotaSummary(payload) {
     }
   }
 
-  if (!windows.length && !groups.length && root?.quota_blance_usage === undefined) return undefined
-
   // 优先用上游给的剩余总额（权威）；它带千分位，num() 已处理。
   const declared = num(root?.quota_remaining_amount)
+  if (declared === undefined && windows.length === 0) return undefined
   const total = declared !== undefined
     ? declared
     : windows.reduce((sum, w) => sum + w.remaining, 0)
   return { windows, total }
+}
+
+function quotaName(name) {
+  const label = name.trim()
+  if (label === '套餐') return WINDOW_NAMES[4]
+  if (label === '活动赠送') return WINDOW_NAMES[3]
+  return label
 }
 
 /**
@@ -97,8 +105,8 @@ export function parseQuotaSummary(payload) {
  */
 function parseWindow(w, group) {
   if (!w || typeof w !== 'object') return null
-  const wt = Number(w.window_type)
-  if (!Number.isFinite(wt)) return null
+  const wt = num(w.window_type)
+  if (wt === undefined) return null
 
   const total = num(w.total_amount) ?? num(w.total)
   const used = num(w.used_amount) ?? num(w.used)
@@ -140,7 +148,10 @@ function num(v) {
   if (typeof v === 'string') {
     // 豆包金额是 "9,000" / "3,921" 这种带千分位的字符串——不去逗号会 NaN
     const cleaned = v.replace(/,/g, '').trim()
-    if (/^-?\d+(\.\d+)?$/.test(cleaned)) return Number(cleaned)
+    if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
+      const parsed = Number(cleaned)
+      if (Number.isFinite(parsed)) return parsed
+    }
   }
   return undefined
 }
@@ -153,11 +164,17 @@ function num(v) {
  */
 export function renderQuota(windows, total) {
   const lines = [`剩余额度合计: ${total.toLocaleString('zh-CN')}`]
+  const now = Date.now()
   for (const w of windows) {
     const parts = [`${w.name}: 剩 ${w.remaining.toLocaleString('zh-CN')} / ${w.total.toLocaleString('zh-CN')}（已用 ${w.usedPercent}%）`]
-    if (w.resetsAt && w.resetsAt > Date.now()) {
-      const mins = Math.round((w.resetsAt - Date.now()) / 60000)
-      parts.push(mins >= 1440 ? `重置: ${Math.round(mins / 1440)} 天后` : mins >= 60 ? `重置: ${Math.round(mins / 60)} 小时后` : `重置: ${mins} 分钟后`)
+    if (w.resetsAt > now) {
+      const remaining = w.resetsAt - now
+      const duration = remaining >= 86_400_000
+        ? `${Math.floor(remaining / 86_400_000)} 天后`
+        : remaining >= 3_600_000
+          ? `${Math.floor(remaining / 3_600_000)} 小时后`
+          : `${Math.ceil(remaining / 60_000)} 分钟后`
+      parts.push(`重置: ${duration}`)
     }
     lines.push('  ' + parts.join(' · '))
   }

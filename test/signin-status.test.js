@@ -60,6 +60,7 @@ test('readCheckin：可领取（status=2、今天未签）', () => {
 test('readCheckin：今天已签', () => {
   const r = readCheckin(detail({ checked: true }))
   assert.equal(r.claimed, true)
+  assert.equal(r.claimable, false)
   assert.ok(r.message.includes('已签到'))
 })
 
@@ -81,8 +82,17 @@ test('readCheckin：没有签到任务（工作版/企业账号）', () => {
 
 test('readCheckin：空响应安全', () => {
   const r = readCheckin({})
+  assert.equal(r.state, 'error')
   assert.equal(r.found, false)
   assert.deepEqual(r.kinds, [])
+})
+
+test('readCheckin：只有明确的任务列表和已知状态才给出资格结论', () => {
+  assert.equal(readCheckin({ data: { tasks: [] } }).state, 'no_task')
+  assert.equal(readCheckin(detail({ status: 7 })).state, 'error')
+  const payload = detail()
+  delete payload.data.tasks[0].daily_checkin.checked_in_today
+  assert.equal(readCheckin(payload).state, 'error')
 })
 
 test('querySigninStatus 用注入 fetch 只读查询（不发领取请求）', async () => {
@@ -118,4 +128,14 @@ test('querySigninStatus：网络异常安全降级', async () => {
   const r = await querySigninStatus('x', { fetchImpl: fakeFetch })
   assert.equal(r.ok, false)
   assert.match(r.message, /ECONNRESET/)
+})
+
+test('querySigninStatus：空 JSON 和 HTTP 错误都无法判定签到资格', async () => {
+  for (const [status, payload] of [[200, null], [200, { code: null }], [503, detail()]]) {
+    const result = await querySigninStatus('x', {
+      fetchImpl: async () => ({ status, json: async () => payload }),
+    })
+    assert.equal(result.state, 'error')
+    assert.equal(result.ok, false)
+  }
 })

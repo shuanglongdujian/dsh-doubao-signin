@@ -91,7 +91,7 @@ test('registerQuotaRoute：注册 exact 路径，disposer 生效', () => {
 test('registerQuotaRoute：GET 成功返回允许清单字段', async () => {
   const h = makeHarness()
   registerQuotaRoute(h.ctx, {
-    readQuota: async () => ({ ok: true, total: 123, windows: [{ name: '套餐积分', remaining: 100, total: 9000, usedPercent: 5 }], summary: '剩余额度合计: 123' }),
+    readQuota: async () => ({ ok: true, total: 123, windows: [{ name: '套餐积分', remaining: 100, total: 9000, usedPercent: 5 }], summary: '剩余额度合计: 123', source: 'pool' }),
   })
   h.boot()
   const res = h.makeRes()
@@ -99,6 +99,7 @@ test('registerQuotaRoute：GET 成功返回允许清单字段', async () => {
   assert.equal(res.statusCode, 200)
   assert.equal(res.body.ok, true)
   assert.equal(res.body.total, 123)
+  assert.equal(res.body.source, 'pool')
   assert.equal(res.body.windows[0].name, '套餐积分')
   assert.equal(res.headers['cache-control'], 'no-store')
   // 不该有上游透传字段
@@ -157,10 +158,11 @@ test('registerQuotaRoute：readQuota 返回 ok:false 时照实转发', async () 
 
 /* ===== 签到与扫码登录路由 ===== */
 
-test('registerQuotaRoute：注册 5 条路由（quota/checkin/login×3）', () => {
+test('registerQuotaRoute：注册额度、签到查询、签到执行和扫码路由', () => {
   const h = makeHarness()
   registerQuotaRoute(h.ctx, {
     readQuota: async () => ({ ok: true, total: 1, windows: [] }),
+    readCheckinStatus: async () => ({ ok: true, state: 'can_sign', message: '今日可签' }),
     runCheckin: async () => ({ ok: true, state: 'done', message: '签到成功' }),
     startLogin: async () => ({ phase: 'starting' }),
     pollLogin: () => ({ phase: 'waiting' }),
@@ -170,11 +172,36 @@ test('registerQuotaRoute：注册 5 条路由（quota/checkin/login×3）', () =
   const paths = h.registered.map(r => r.path).sort()
   assert.deepEqual(paths, [
     '/plugins/dsh-doubao-signin/checkin/run',
+    '/plugins/dsh-doubao-signin/checkin/status',
     '/plugins/dsh-doubao-signin/login/cancel',
     '/plugins/dsh-doubao-signin/login/poll',
     '/plugins/dsh-doubao-signin/login/start',
     '/plugins/dsh-doubao-signin/quota',
   ])
+})
+
+test('签到状态路由只允许本机 GET，走只读查询并剔除内部字段', async () => {
+  const h = makeHarness()
+  let reads = 0
+  registerQuotaRoute(h.ctx, {
+    readQuota: async () => ({ ok: false }),
+    readCheckinStatus: async () => {
+      reads++
+      return { ok: true, state: 'can_sign', message: '今日可签', details: { internal: true } }
+    },
+    runCheckin: async () => assert.fail('状态查询触发了签到'),
+  })
+  h.boot()
+  const handler = h.registered.find(route => route.path.endsWith('/checkin/status')).handler
+  const valid = h.makeRes()
+  await handler(h.makeReq('GET', { host: 'localhost:1' }), valid)
+  assert.deepEqual(valid.body, { ok: true, state: 'can_sign', message: '今日可签' })
+  for (const [method, host, status] of [['POST', 'localhost:1', 405], ['GET', 'example.com', 403]]) {
+    const res = h.makeRes()
+    await handler(h.makeReq(method, { host }), res)
+    assert.equal(res.statusCode, status)
+  }
+  assert.equal(reads, 1)
 })
 
 test('registerQuotaRoute：签到路由 POST 成功返回 state', async () => {

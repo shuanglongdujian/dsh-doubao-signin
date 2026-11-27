@@ -66,19 +66,27 @@ export function detailUrl(ids = {}) {
 /**
  * 从详情响应里读签到状态（纯函数）。
  * @param {object} detail - detail 接口的 JSON。
- * @returns {{found: boolean, claimed?: boolean, claimable?: boolean, status?: number, points?: number, streak?: number, kinds: string[], message: string}} 状态。
+ * @returns {{state: string, found: boolean, claimed?: boolean, claimable?: boolean, status?: number, points?: number, streak?: number, kinds: string[], message: string}} 状态。
  */
 export function readCheckin(detail) {
   const data = detail?.data ?? detail
   const tasks = Array.isArray(data?.tasks)
     ? data.tasks
-    : Array.isArray(data?.campaign_group?.tasks) ? data.campaign_group.tasks : []
-  const withDaily = tasks.filter(t => t?.campaign_code && t?.daily_checkin)
-  const task = withDaily.find(t => t.campaign_code === SIGNIN_TASK) ?? withDaily[0]
+    : data?.campaign_group?.tasks
+  if (!Array.isArray(tasks)) {
+    return { state: 'error', found: false, kinds: [], message: '签到接口没有返回任务列表，暂时无法判断资格' }
+  }
+  const withDaily = tasks.filter(t => t?.daily_checkin && typeof t.daily_checkin === 'object' && !Array.isArray(t.daily_checkin))
+  const task = tasks.find(t => t?.campaign_code === SIGNIN_TASK || t?.task_kind === SIGNIN_TASK)
+    ?? (withDaily.length === 1 ? withDaily[0] : undefined)
   const kinds = [...new Set(tasks.map(t => t?.task_kind).filter(Boolean))]
 
   if (!task) {
+    if (withDaily.length > 1 || tasks.some(t => !t || typeof t !== 'object' || !(t.campaign_code || t.task_kind))) {
+      return { state: 'error', found: false, kinds, message: '无法识别签到任务，暂时无法判断资格' }
+    }
     return {
+      state: 'no_task',
       found: false,
       kinds,
       message: kinds.length
@@ -87,21 +95,34 @@ export function readCheckin(detail) {
     }
   }
 
-  const daily = task.daily_checkin ?? {}
-  const status = Number(task.task_status)
-  const claimed = daily.checked_in_today === true
-  const points = Number(daily.reward?.reward_amount) || 0
-  const streak = Number(daily.continuous_days) || 0
+  const daily = task.daily_checkin
+  if (!daily || typeof daily.checked_in_today !== 'boolean') {
+    return { state: 'error', found: true, kinds, message: '签到任务缺少今日签到状态，暂时无法判断资格' }
+  }
+  const status = readNumber(task.task_status)
+  const claimed = daily.checked_in_today
+  const claimable = !claimed && status === 2
+  const points = readNumber(daily.reward?.reward_amount) ?? 0
+  const streak = readNumber(daily.continuous_days) ?? 0
 
-  let message
-  if (claimed) message = `今天已签到${streak ? `，连续 ${streak} 天` : ''}`
-  else if (status !== 2) message = '今日未签，但这个账号的签到暂不可领（没被投放活动）'
-  else message = `今日可签（+${points || 200} 额度）——请到豆包电脑版客户端点签到`
+  let state = 'error'
+  let message = '签到任务返回了未知状态，暂时无法判断资格'
+  if (claimed) {
+    state = 'already'
+    message = `今天已签到${streak ? `，连续 ${streak} 天` : ''}`
+  } else if (claimable) {
+    state = 'can_sign'
+    message = `今日可签${points > 0 ? `（+${points} 额度）` : ''}，请到豆包电脑版客户端点签到`
+  } else if (status === 1) {
+    state = 'ineligible'
+    message = '今日未签，当前账号暂不可领'
+  }
 
   return {
+    state,
     found: true,
     claimed,
-    claimable: status === 2,
+    claimable,
     status,
     points,
     streak,
@@ -109,6 +130,12 @@ export function readCheckin(detail) {
     kinds,
     message,
   }
+}
+
+function readNumber(value) {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return undefined
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
 }
 
 /**
@@ -150,18 +177,22 @@ export async function querySigninStatus(cookieHeader, opts = {}) {
     return { ok: false, state: 'error', message: `签到状态接口返回非 JSON（HTTP ${res.status}）` }
   }
 
-  const code = Number(body.code)
-  if (code === LOGIN_INVALID) {
+  const code = body?.code
+  if (readNumber(code) === LOGIN_INVALID || res.status === 401) {
     return { ok: false, state: 'unlogged', message: '豆包登录已过期（Cookie 失效），重新扫码登录' }
   }
-  if (code !== 0) {
-    return { ok: false, state: 'error', message: `签到状态接口异常：${body.msg ?? body.message ?? ''}（code ${code}）` }
+  if (res.ok === false || res.status >= 400) {
+    return { ok: false, state: 'error', message: `签到状态接口异常（HTTP ${res.status}）` }
+  }
+  if (code !== 0 && code !== '0') {
+    const reason = typeof code === 'number' || typeof code === 'string' ? `（code ${code}）` : ''
+    return { ok: false, state: 'error', message: `签到状态接口未返回有效结果${reason}` }
   }
 
   const info = readCheckin(body)
   return {
-    ok: info.found || info.claimed === true,
-    state: info.claimed ? 'already' : info.claimable ? 'can_sign' : info.found ? 'ineligible' : 'no_task',
+    ok: info.found && info.state !== 'error',
+    state: info.state,
     message: info.message,
     details: info,
   }

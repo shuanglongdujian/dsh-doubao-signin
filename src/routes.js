@@ -3,6 +3,7 @@
  *
  * 路由清单（client/doubao-card.js 顶部常量与此对齐）：
  * - GET  /plugins/dsh-doubao-signin/quota          额度看板数据
+ * - GET  /plugins/dsh-doubao-signin/checkin/status 当日签到状态
  * - POST /plugins/dsh-doubao-signin/checkin/run   执行一次每日签到
  * - POST /plugins/dsh-doubao-signin/login/start   拉起浏览器扫码登录
  * - GET  /plugins/dsh-doubao-signin/login/poll    查扫码进度
@@ -21,6 +22,7 @@ export const QUOTA_ROUTE_PATH = '/plugins/dsh-doubao-signin/quota'
 
 /** 签到执行路由。 */
 export const CHECKIN_ROUTE_PATH = '/plugins/dsh-doubao-signin/checkin/run'
+export const CHECKIN_STATUS_ROUTE_PATH = '/plugins/dsh-doubao-signin/checkin/status'
 
 /** 扫码登录启动路由。 */
 export const LOGIN_START_ROUTE_PATH = '/plugins/dsh-doubao-signin/login/start'
@@ -87,6 +89,7 @@ function passLoopback(req, res) {
  * @param {object} ctx - cordis 上下文（需要 webServer 服务）。
  * @param {object} deps - 依赖。
  * @param {() => Promise<object>} deps.readQuota - 读额度。
+ * @param {() => Promise<object>} [deps.readCheckinStatus] - 只读签到状态。
  * @param {(opts: object) => Promise<object>} [deps.runCheckin] - 跑签到。
  * @param {() => Promise<object>} [deps.startLogin] - 拉起扫码登录。
  * @param {() => object} [deps.pollLogin] - 查扫码进度。
@@ -96,6 +99,7 @@ function passLoopback(req, res) {
  */
 export function registerQuotaRoute(ctx, {
   readQuota,
+  readCheckinStatus,
   runCheckin,
   startLogin,
   pollLogin,
@@ -132,7 +136,8 @@ export function registerQuotaRoute(ctx, {
           const data = await readQuota()
           json(res, 200, {
             ok: data.ok === true,
-            ...(data.ok === true ? { total: data.total ?? 0, windows: data.windows ?? [] } : {}),
+            ...(data.ok === true ? { total: data.total, windows: data.windows ?? [] } : {}),
+            ...(['pool', 'saved', 'client'].includes(data.source) ? { source: data.source } : {}),
             ...(typeof data.summary === 'string' ? { summary: data.summary } : {}),
           })
         } catch (error) {
@@ -141,6 +146,24 @@ export function registerQuotaRoute(ctx, {
         }
       },
     })
+
+    if (typeof readCheckinStatus === 'function') {
+      route({
+        kind: 'exact',
+        path: CHECKIN_STATUS_ROUTE_PATH,
+        handler: async (req, res) => {
+          if (!passLoopback(req, res)) return
+          if (req.method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+          try {
+            const result = await readCheckinStatus()
+            json(res, 200, { ok: result.ok === true, state: result.state, message: result.message })
+          } catch (error) {
+            log.error?.(`checkin status route 失败: ${error.message}`)
+            json(res, 500, { ok: false, state: 'error', message: '暂时无法查询签到状态' })
+          }
+        },
+      })
+    }
 
     // —— 签到（POST，会动客户端）——
     if (typeof runCheckin === 'function') {

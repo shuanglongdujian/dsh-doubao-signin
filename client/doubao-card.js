@@ -26,13 +26,40 @@ window.__ModuleLoader__.load({
     const LOCALE_NAMESPACE = 'settings.doubao-signin'
     const NS_CANDIDATES = ['dsh-doubao-signin']
     const STATUS_PATH = '/plugins/dsh-doubao-signin/quota'
-    const KEEPALIVE_RUN_PATH = '/plugins/dsh-doubao-signin/quota'
     const CHECKIN_RUN_PATH = '/plugins/dsh-doubao-signin/checkin/run'
+    const CHECKIN_STATUS_PATH = '/plugins/dsh-doubao-signin/checkin/status'
+    const QUOTA_REFRESH_INTERVAL_MS = 30_000
     const LOGIN_START_PATH = '/plugins/dsh-doubao-signin/login/start'
     const LOGIN_POLL_PATH = '/plugins/dsh-doubao-signin/login/poll'
     const LOGIN_CANCEL_PATH = '/plugins/dsh-doubao-signin/login/cancel'
     /** 登录轮询节奏：1.5s 一轮，扫码成功后最迟这么久就能反馈（对齐 workbuddy 的做法）。 */
     const LOGIN_POLL_INTERVAL_MS = 1500
+
+    /**
+     * 模型目录（与 src/protocol.js 的 MODELS 快照一致，2026-11-19 实测）。
+     * 客户端 bundle 不能 import 宿主的 src/，所以这里是一份展示用的静态副本。
+     * 真实请求以 Host 侧的 MODELS 为准——改那边时记得同步这里。
+     */
+    const MODEL_CATALOG = [
+      { id: 'doubao', name: '豆包', key: '0', work: false, ctx: 131072, levels: '3/4/5' },
+      { id: 'doubao-expert', name: '豆包 专家', key: '3', work: false, ctx: 131072, levels: '3/4/5' },
+      { id: 'doubao-auto', name: '豆包 自动', key: '9', work: true, ctx: 262144, levels: '3/4/5' },
+      { id: 'doubao-2.1-lite', name: '豆包 2.1 Lite', key: 'seed-lite-7b', work: true, ctx: 262144, levels: '3/4/5' },
+      { id: 'doubao-2.1-pro', name: '豆包 2.1 Pro', key: '5', work: true, ctx: 262144, levels: '3/4/5' },
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', key: 'person-deepseek-v4-1-flash-261017', work: true, ctx: 300000, levels: '3–7' },
+      { id: 'qwen4-max', name: 'Qwen 4 Max', key: 'person-qwen4-max', work: true, ctx: 300000, levels: '3/5/6' },
+      { id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro', key: 'person-kimi-k3-1-pro-261111', work: true, ctx: 300000, levels: '3–7' },
+      { id: 'kimi-k3.1-pro-highspeed', name: 'Kimi K3.1 Pro 高速', key: 'person-kimi-k3-1-pro-highspeed-261111', work: true, ctx: 300000, levels: '3–7' },
+      { id: 'kimi-k3', name: 'Kimi K3', key: 'person-kimi-k3-261111', work: true, ctx: 300000, levels: '3–7' },
+      { id: 'glm-5.3', name: 'GLM 5.3', key: 'person-glm-5-3-261111', work: true, ctx: 300000, levels: '3/5/7' },
+      { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', key: 'person-glm-5-3-flash-261111', work: true, ctx: 300000, levels: '3/5/7' },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', key: 'person-deepseek-v4-pro-ga-260813', work: true, ctx: 300000, levels: '3–7' },
+      { id: 'qwen3.8-max', name: 'Qwen 3.8 Max', key: 'person-qwen3-8-max', work: true, ctx: 300000, levels: '3/5/6' },
+      { id: 'qwen3.8-flash', name: 'Qwen 3.8 Flash', key: 'person-qwen3-8-flash', work: true, ctx: 300000, levels: '3/5/6' },
+    ]
+
+    /** 上下文容量显示成 K（300000 → 300K）。 */
+    const ctxLabel = n => n >= 1000 ? (n / 1000) + 'K' : String(n)
 
     /**
      * 卡片样式表。
@@ -270,6 +297,7 @@ window.__ModuleLoader__.load({
         'action.waiting': "等待扫码",
         'action.cancel': "取消",
         'action.checkin': "执行每日签到",
+        'action.checkinStatus': '查看签到状态',
         'action.checking': "处理中…",
         'action.refresh': "刷新",
         'action.saved': "已保存",
@@ -281,8 +309,20 @@ window.__ModuleLoader__.load({
         'tab.overview': '额度',
         'tab.gateway': '登录',
         'tab.models': '签到',
+        'tab.catalog': '模型',
         'tab.accounts': '额度',
         'tab.diagnostics': '额度',
+        'catalog.desc': '这些是插件注册到 DSH 模型选择器里的豆包模型。在对话界面的模型下拉框里选「豆包 Doubao」分组即可使用。',
+        'catalog.col.name': '模型',
+        'catalog.col.key': '上游键',
+        'catalog.col.mode': '形态',
+        'catalog.col.ctx': '上下文',
+        'catalog.col.levels': '思考档位',
+        'catalog.mode.chat': '对话',
+        'catalog.mode.work': '工作',
+        'catalog.count': '个模型',
+        'catalog.free': '免费',
+        'catalog.member': '会员额度',
         'hint.workMode': '数据来自插件路由 /plugins/dsh-doubao-signin/quota，同源只读 fetch。',
         'hint.flattenHistory': '豆包 cookie 只活在 Host 进程里，永远不进页面。',
         'hint.poolEnabled': '每 30 秒自动刷新一次。',
@@ -311,6 +351,8 @@ window.__ModuleLoader__.load({
         'never': '—',
         'source.saved': '来源：扫码保存的凭据',
         'source.client': '来源：豆包桌面客户端',
+        'source.pool': '来源：账号池',
+        'checkin.unavailable': '暂时无法查询签到状态，请重试。',
         'signedOut': '尚未登录。用 doubao_login 扫码登录一次即可看到额度。',
         'clientMissing': '豆包客户端可能没在运行（额度读的是它的会话），或还没登录。',
       },
@@ -319,8 +361,24 @@ window.__ModuleLoader__.load({
         'card.title': 'Doubao credits',
         'card.desc': 'Remaining Doubao credits: package points and activity grants (the ones daily check-in earns). Read-only.',
         'tab.overview': 'Credits',
-        'tab.gateway': 'Credits',
-        'tab.models': 'Credits',
+        'tab.gateway': 'Sign in',
+        'tab.models': 'Check-in',
+        'tab.catalog': 'Models',
+        'catalog.desc': 'These Doubao models are registered with the DSH model picker. Select the "豆包 Doubao" group in the chat model dropdown.',
+        'catalog.col.name': 'Model',
+        'catalog.col.key': 'Upstream key',
+        'catalog.col.mode': 'Surface',
+        'catalog.col.ctx': 'Context',
+        'catalog.col.levels': 'Reasoning',
+        'catalog.mode.chat': 'Chat',
+        'catalog.mode.work': 'Work',
+        'catalog.count': 'models',
+        'catalog.free': 'free',
+        'catalog.member': 'member quota',
+        'action.checkin': 'Run daily check-in',
+        'action.checkinStatus': 'Check today’s status',
+        'action.checking': 'Working…',
+        'action.refresh': 'Refresh',
         'tab.accounts': 'Credits',
         'tab.diagnostics': 'Credits',
         'hint.workMode': 'Data comes from the plugin route /plugins/dsh-doubao-signin/quota (same-origin read-only fetch).',
@@ -351,6 +409,8 @@ window.__ModuleLoader__.load({
         'never': '—',
         'source.saved': 'source: saved scan credentials',
         'source.client': 'source: Doubao desktop client',
+        'source.pool': 'source: account pool',
+        'checkin.unavailable': 'Check-in status is unavailable. Try again.',
         'signedOut': 'Not signed in yet. Run doubao_login once to see credits.',
         'clientMissing': 'The Doubao desktop client may not be running (credits come from its session), or you are not signed in.',
       },
@@ -366,14 +426,16 @@ window.__ModuleLoader__.load({
       const [savedAt, setSavedAt] = react.useState(0)
       const [status, setStatus] = react.useState(null)
       const [statusError, setStatusError] = react.useState(false)
-      const [probing, setProbing] = react.useState(false)
       const [checkingIn, setCheckingIn] = react.useState(false)
-      const [refreshing, setRefreshing] = react.useState(false)
       const [checking, setChecking] = react.useState(false)
+      const [checkingStatus, setCheckingStatus] = react.useState(false)
+      const [now, setNow] = react.useState(() => Date.now())
+      const quotaRequest = react.useRef(null)
+      const quotaMounted = react.useRef(false)
       // 当前面板：与 workbuddy 一致用「一个文档的多个面板」而不是二选一开关格。
       // 面板全部保持挂载（hidden 只隐藏不卸载），所以切回来不会重拉数据、
       // 半填的草稿也不会丢。
-      const [tab, setTab] = react.useState('overview')
+      const [tab, setTab] = react.useState('credits')
       // 扫码登录本地状态机：idle → starting → waiting → success | error
       // 只放浏览器侧的展示状态，二维码字节与 loginId 都来自 Host 的 start 响应
       const [login, setLogin] = react.useState({ phase: 'idle' })
@@ -382,35 +444,79 @@ window.__ModuleLoader__.load({
       const value = draft ?? config
       const dirty = draft !== null
 
-      react.useEffect(() => {
-        let alive = true
-        fetch(STATUS_PATH, { headers: { accept: 'application/json' } })
-          .then(response => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-          .then(data => { if (alive) { setStatus(data); setStatusError(false) } })
-          .catch(() => { if (alive) setStatusError(true) })
-        return () => { alive = false }
-      }, [savedAt])
-
-      /** 千分位格式化；读不出显示 —，不显示 0。 */
-      const fmtNumber = (value) => (typeof value === 'number' ? value.toLocaleString('zh-CN') : '—')
-
-      /** 重新读一次额度。 */
-      const refreshStatus = async () => {
+      const refreshStatus = react.useCallback(async (replace = false) => {
+        if (!quotaMounted.current) return
+        setNow(Date.now())
+        if (quotaRequest.current && !replace) return
+        quotaRequest.current?.abort()
+        const request = new AbortController()
+        quotaRequest.current = request
         setChecking(true)
         try {
-          const response = await fetch(STATUS_PATH, { headers: { accept: 'application/json' } })
-          const data = response.ok ? await response.json() : null
-          if (data) { setStatus(data); setStatusError(false) } else { setStatusError(true) }
-        } catch { setStatusError(true) } finally { setChecking(false) }
+          const response = await fetch(STATUS_PATH, {
+            headers: { accept: 'application/json' },
+            signal: AbortSignal.any([request.signal, AbortSignal.timeout(25_000)]),
+          })
+          if (!response.ok) throw new Error(String(response.status))
+          const data = await response.json()
+          if (typeof data?.ok !== 'boolean') throw new Error('Invalid quota response')
+          if (quotaRequest.current !== request) return
+          setStatus(data)
+          setStatusError(false)
+        } catch {
+          if (quotaRequest.current !== request) return
+          setStatus(null)
+          setStatusError(true)
+        } finally {
+          if (quotaRequest.current === request) {
+            quotaRequest.current = null
+            setNow(Date.now())
+            setChecking(false)
+          }
+        }
+      }, [])
+
+      react.useEffect(() => {
+        quotaMounted.current = true
+        void refreshStatus()
+        const timer = setInterval(() => { void refreshStatus() }, QUOTA_REFRESH_INTERVAL_MS)
+        return () => {
+          quotaMounted.current = false
+          clearInterval(timer)
+          quotaRequest.current?.abort()
+          quotaRequest.current = null
+        }
+      }, [refreshStatus, savedAt])
+
+      const fmtNumber = value => Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—'
+
+      const checkTodayStatus = async () => {
+        setCheckingStatus(true)
+        setCheckinResult(null)
+        try {
+          const response = await fetch(CHECKIN_STATUS_PATH, {
+            headers: { accept: 'application/json' },
+            signal: AbortSignal.timeout(25_000),
+          })
+          const data = await response.json()
+          if (typeof data?.state !== 'string' || typeof data.message !== 'string') throw new Error('Invalid check-in status')
+          setCheckinResult({ ok: response.ok && data.ok === true, state: data.state, message: data.message })
+        } catch {
+          setCheckinResult({ ok: false, state: 'error', message: t('checkin.unavailable') })
+        } finally {
+          setCheckingStatus(false)
+        }
       }
 
       /** 执行一次每日签到（Host 侧走客户端真实 UI）。 */
       const runCheckinAction = async () => {
         setCheckingIn(true)
+        setCheckinResult(null)
         try {
           const response = await fetch(CHECKIN_RUN_PATH, { method: 'POST', headers: { accept: 'application/json' } })
           const data = await response.json()
           setCheckinResult({ ok: data?.ok === true, state: data?.state ?? 'unknown', message: data?.message ?? '' })
+          if (response.ok && data?.ok === true) void refreshStatus(true)
         } catch (error) {
           setCheckinResult({ ok: false, state: 'error', message: String(error?.message ?? error) })
         } finally { setCheckingIn(false) }
@@ -435,40 +541,6 @@ window.__ModuleLoader__.load({
         }
         setDraft(null)
         setSavedAt(Date.now())
-      }
-
-      const probeNow = async () => {
-        setProbing(true)
-        try {
-          const response = await fetch(KEEPALIVE_RUN_PATH, { method: 'POST', headers: { accept: 'application/json' } })
-          if (response.ok) {
-            setStatus(await response.json())
-            setStatusError(false)
-          }
-        } catch {} finally {
-          setProbing(false)
-        }
-      }
-
-      /**
-       * 立即签到：POST /checkin/run。Host 侧是 force 模式（忽略「今日已签」去重），
-       * 所以按钮点一次就真的访问一次豆包——这也是用户手动验证登录态的手段。
-       * 返回的是新的 pending state，随后整份 status 重拉以刷新「今日结果」。
-       */
-      const checkinNow = async () => {
-        setCheckingIn(true)
-        try {
-          const response = await fetch(CHECKIN_RUN_PATH, { method: 'POST', headers: { accept: 'application/json' } })
-          if (response.ok) {
-            const snapshot2 = await fetch(STATUS_PATH, { headers: { accept: 'application/json' } })
-            if (snapshot2.ok) {
-              setStatus(await snapshot2.json())
-              setStatusError(false)
-            }
-          }
-        } catch {} finally {
-          setCheckingIn(false)
-        }
       }
 
       /**
@@ -497,6 +569,7 @@ window.__ModuleLoader__.load({
           if (phase === 'waiting' || phase === 'starting') {
             setTimeout(pollLogin, 1500)
           }
+          if (phase === 'success') void refreshStatus(true)
         } catch (error) {
           setLogin({ phase: 'error', message: String(error?.message ?? error) })
         }
@@ -667,29 +740,33 @@ window.__ModuleLoader__.load({
           items.push(h('div', { key: 'total', className: 'dsm-doubao-signin-bar' },
             h('span', { className: 'dsm-doubao-signin-badge dsm-doubao-signin-badge-ok' }, t('total') + ' ' + fmtNumber(status.total)),
             h('div', { className: 'dsm-doubao-signin-bar-actions' },
-              button('credits-refresh', checking ? t('action.checking') : t('action.refresh'), refreshStatus, 'outline', checking))))
+              button('credits-refresh', checking ? t('action.checking') : t('action.refresh'), () => refreshStatus(), 'outline', checking))))
           const windows = Array.isArray(win) ? win : []
           if (windows.length > 0) {
             const rows = []
             for (const w of windows) {
               const parts = [w.name + '：' + fmtNumber(w.remaining) + ' / ' + fmtNumber(w.total) + '（已用 ' + w.usedPercent + '%）']
-              if (w.resetsAt && w.resetsAt > Date.now()) {
-                const mins = Math.round((w.resetsAt - Date.now()) / 60000)
-                parts.push(mins >= 1440 ? '重置 ' + Math.round(mins / 1440) + ' 天后' : mins >= 60 ? '重置 ' + Math.round(mins / 60) + ' 小时后' : '重置 ' + mins + ' 分钟后')
+              const remaining = w.resetsAt - now
+              if (remaining > 0) {
+                const duration = remaining >= 86_400_000
+                  ? Math.floor(remaining / 86_400_000) + ' ' + t('days')
+                  : remaining >= 3_600_000
+                    ? Math.floor(remaining / 3_600_000) + ' ' + t('hours')
+                    : Math.ceil(remaining / 60_000) + ' ' + t('minutes')
+                parts.push(t('resetIn') + ' ' + duration)
               }
-              rows.push(h('div', { key: w.name, className: 'dsm-doubao-signin-note' }, parts.join(' · ')))
+              rows.push(h('div', { key: rows.length, className: 'dsm-doubao-signin-note' }, parts.join(' · ')))
             }
             items.push(h('div', { key: 'windows', className: 'dsm-doubao-signin-section' }, ...rows))
           }
           if (status?.source) {
-            items.push(h('p', { key: 'source', className: 'dsm-doubao-signin-hint' },
-              status.source === 'saved' ? t('source.saved') : t('source.client')))
+            items.push(h('p', { key: 'source', className: 'dsm-doubao-signin-hint' }, t('source.' + status.source)))
           }
         } else {
           items.push(h('p', { key: 'unreadable', className: 'dsm-doubao-signin-hint' },
-            statusError ? t('unavailable') + '。' + t('clientMissing') : (status?.summary || t('signedOut'))))
+            statusError ? t('unavailable') : (status?.summary || (status ? t('unavailable') : t('loading')))))
           items.push(h('div', { key: 'credits-bar', className: 'dsm-doubao-signin-bar' },
-            button('credits-refresh', checking ? t('action.checking') : t('action.refresh'), refreshStatus, 'outline', checking)))
+            button('credits-refresh', checking ? t('action.checking') : t('action.refresh'), () => refreshStatus(), 'outline', checking)))
         }
         return items
       })()))
@@ -731,13 +808,42 @@ window.__ModuleLoader__.load({
         const items = []
         const ck = checkinResult
         if (ck) {
-          items.push(h('div', { key: 'checkin-result', className: 'dsm-doubao-signin-bar' },
+          items.push(h('div', { key: 'checkin-result', role: 'status', className: 'dsm-doubao-signin-bar' },
             h('span', { className: 'dsm-doubao-signin-badge' + (ck.ok ? ' dsm-doubao-signin-badge-ok' : '') }, '[' + (ck.state ?? 'unknown') + ']'),
             h('span', { className: 'dsm-doubao-signin-note' }, ck.message ?? '')))
         }
         items.push(h('div', { key: 'checkin-bar', className: 'dsm-doubao-signin-bar' },
-          button('checkin-run', checkingIn ? t('action.checking') : t('action.checkin'), runCheckinAction, 'primary', checkingIn)))
+          button('checkin-status', checkingStatus ? t('action.checking') : t('action.checkinStatus'), checkTodayStatus, 'outline', checkingIn || checkingStatus),
+          button('checkin-run', checkingIn ? t('action.checking') : t('action.checkin'), runCheckinAction, 'primary', checkingIn || checkingStatus)))
         items.push(h('p', { key: 'checkin-note', className: 'dsm-doubao-signin-hint' }, t('field.keepaliveEnabled.true')))
+        return items
+      })()))
+
+      const modelPanel = []
+      modelPanel.push(group('g-catalog', t('tab.catalog'), (() => {
+        const items = []
+        items.push(h('p', { key: 'catalog-desc', className: 'dsm-doubao-signin-hint' }, t('catalog.desc')))
+        items.push(h('div', { key: 'catalog-count', className: 'dsm-doubao-signin-bar' },
+          h('span', { className: 'dsm-doubao-signin-badge dsm-doubao-signin-badge-ok' }, String(MODEL_CATALOG.length)),
+          h('span', { className: 'dsm-doubao-signin-note' }, t('catalog.count'))))
+        items.push(h('div', { key: 'catalog-table', className: 'dsm-doubao-signin-table' },
+          // 表头
+          h('div', { key: 'th', className: 'dsm-doubao-signin-table-row' },
+            h('span', { key: 'n', className: 'dsm-doubao-signin-table-name' }, t('catalog.col.name')),
+            h('span', { key: 'm', className: 'dsm-doubao-signin-table-meta' }, t('catalog.col.mode')),
+            h('span', { key: 'c', className: 'dsm-doubao-signin-table-meta' }, t('catalog.col.ctx')),
+            h('span', { key: 'l', className: 'dsm-doubao-signin-table-meta' }, t('catalog.col.levels'))),
+          // 数据行
+          ...MODEL_CATALOG.map(m => h('div', { key: 'row-' + m.id, className: 'dsm-doubao-signin-table-row' },
+            h('span', { key: 'n', className: 'dsm-doubao-signin-table-name', title: m.key },
+              m.name + '  ' + h('span', { className: 'dsm-doubao-signin-note' }, m.id)),
+            h('span', { key: 'm', className: 'dsm-doubao-signin-table-meta' },
+              m.work ? t('catalog.mode.work') : t('catalog.mode.chat')),
+            h('span', { key: 'c', className: 'dsm-doubao-signin-table-meta' }, ctxLabel(m.ctx)),
+            h('span', { key: 'l', className: 'dsm-doubao-signin-table-meta' }, m.levels)))))
+        items.push(h('p', { key: 'catalog-note', className: 'dsm-doubao-signin-hint' },
+          t('catalog.free') + '：' + t('catalog.mode.chat') + '；'
+          + t('catalog.member') + '：' + t('catalog.mode.work')))
         return items
       })()))
 
@@ -745,6 +851,7 @@ window.__ModuleLoader__.load({
         ['credits', t('tab.overview')],
         ['login', t('tab.gateway')],
         ['checkin', t('tab.models')],
+        ['catalog', t('tab.catalog')],
       ]
       const tabBar = h('div', { key: 'tabs', className: 'dsm-doubao-signin-panels', role: 'tablist' },
         ...tabs.map(([id, label]) => h('button', {
@@ -767,6 +874,7 @@ window.__ModuleLoader__.load({
         panel('credits', creditsPanel),
         panel('login', loginPanel),
         panel('checkin', checkinPanel),
+        panel('catalog', modelPanel),
         saveBar)
     }
 

@@ -127,7 +127,7 @@ test('2026-11 新结构：从 window_limit_section 里解析出月度套餐', ()
   assert.equal(r.windows[0].total, 9000, '"9,000" 必须去千分位')
   assert.equal(r.windows[0].used, 5079)
   assert.equal(r.windows[0].remaining, 3921)
-  assert.ok(r.windows[0].resetsAt > Date.now())
+  assert.equal(r.windows[0].resetsAt, 1795793522669)
 })
 
 test('2026-11 新结构：total 用上游 quota_remaining_amount（权威，带千分位）', () => {
@@ -152,4 +152,28 @@ test('千分位字符串不产生 NaN', () => {
   } })
   assert.equal(r.windows[0].total, 1234567)
   assert.ok(Number.isFinite(r.windows[0].remaining))
+})
+
+test('有套餐窗口时仍补齐活动额度，同时避免重复计算同一个套餐', () => {
+  const data = {
+    ...REAL_2026_11.data,
+    quota_remaining_amount: undefined,
+    window_limit_groups: [],
+    quota_blance_usage: [
+      ...REAL_2026_11.data.quota_blance_usage,
+      { title: '活动赠送', total_amount: '880', used_amount: '200' },
+    ],
+  }
+  const { windows, total } = parseQuotaSummary({ data })
+  assert.deepEqual(windows.map(w => w.remaining), [3921, 680])
+  assert.equal(windows[0].resetsAt, 1795793522669)
+  assert.equal(windows[1].resetsAt, undefined)
+  assert.equal(total, 4601)
+})
+
+test('单独有效的总额可以展示，无法解析的窗口不会变成余额 0', () => {
+  assert.deepEqual(parseQuotaSummary({ data: { quota_remaining_amount: '3,921' } }), { total: 3921, windows: [] })
+  assert.deepEqual(parseQuotaSummary({ data: { quota_remaining_amount: '0' } }), { total: 0, windows: [] })
+  assert.equal(parseQuotaSummary({ window_limit_groups: [{ window_limits: [{}] }] }), undefined)
+  assert.equal(parseQuotaSummary({ quota_blance_usage: [null] }), undefined)
 })

@@ -277,6 +277,15 @@ export async function apply(ctx, rawConfig = {}) {
     },
   })
 
+  const readCheckinStatus = async () => {
+    const cookie = await cookieSource().catch(() => ({ header: '' }))
+    if (!cookie.header) {
+      return { ok: false, state: 'unlogged', message: '没有登录凭据。先扫码登录，再查签到状态。' }
+    }
+    const { querySigninStatus } = await import('./src/signin-status.js')
+    return querySigninStatus(cookie.header)
+  }
+
   // —— LLM provider：让豆包模型出现在模型选择器 ——
   // 契约来自 dsh-llm registerAdapter：结构化校验，不需要 extends / pi-ai / 新依赖。
   // llm 服务由 inject=['tools','llm'] 保证就绪。
@@ -744,15 +753,7 @@ export async function apply(ctx, rawConfig = {}) {
       }
     },
     async execute(args) {
-      // dryRun：用 Cookie 只读查状态（无客户端也能用，绝对不写）
-      if (args.dryRun === true) {
-        const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
-        if (!cookie.header) {
-          return { ok: false, state: 'unlogged', message: '没有登录凭据。先跑 doubao_login 扫码登录，再查签到状态。' }
-        }
-        const { querySigninStatus } = await import('./src/signin-status.js')
-        return querySigninStatus(cookie.header)
-      }
+      if (args.dryRun === true) return readCheckinStatus()
 
       // 真签到：只允许走客户端真实 UI（CDP）
       // 绝不发 /landing/checkin——网页代签返回 710010702 且作废当天额度，不可回滚。
@@ -967,6 +968,7 @@ export async function apply(ctx, rawConfig = {}) {
       // webServer 被替换时回调重跑能正确清理旧路由，避免 duplicate route。
       registerQuotaRoute(scoped, {
         webServer: server,
+        readCheckinStatus,
         readQuota: async () => {
           try {
             const cookie = await cookieSource().catch(() => ({ header: '', source: 'none', ready: false }))
@@ -988,6 +990,7 @@ export async function apply(ctx, rawConfig = {}) {
                 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
               },
               body: '{}',
+              signal: AbortSignal.timeout(20_000),
             })
             if (!res.ok) throw new Error(`额度端点 HTTP ${res.status}`)
             const payload = await res.json()
@@ -997,6 +1000,7 @@ export async function apply(ctx, rawConfig = {}) {
               ok: true,
               total: parsed.total,
               windows: parsed.windows,
+              source: cookie.source,
               summary: renderQuota(parsed.windows, parsed.total),
             }
           } catch (error) {
@@ -1043,7 +1047,7 @@ export async function apply(ctx, rawConfig = {}) {
         cancelLogin: () => { loginState = { phase: 'idle' } },
         log,
     })
-      log('卡片路由已注册: /plugins/dsh-doubao-signin/{quota,checkin/run,login/*}')
+      log('卡片路由已注册: /plugins/dsh-doubao-signin/{quota,checkin/*,login/*}')
     })
   } else {
     // 无 ctx.inject 的环境（测试替身）：退回同步探测，不影响工具

@@ -41,7 +41,7 @@ const ReactStub = {
  * 在沙箱里执行 bundle（浏览器语义：没有 CJS exports）。
  * @returns {{reg: object, context: object}} 注册信息。
  */
-function runBundle() {
+function runBundle(overrides = {}) {
   const registered = {}
   const sandboxWindow = { __ModuleLoader__: { load: reg => { registered[reg.id] = reg } } }
   const context = vm.createContext({
@@ -63,6 +63,9 @@ function runBundle() {
       body: { appendChild() {}, classList: { add() {}, remove() {} } },
     },
     URLSearchParams,
+    AbortController,
+    AbortSignal,
+    ...overrides,
   })
   vm.runInContext(SRC, context, { filename: 'doubao-card.js' })
   return { reg: registered['dsh-doubao-signin'], context }
@@ -161,6 +164,87 @@ test('沙箱实跑：卡片组件能渲染出元素', () => {
   assert.ok(el, '组件应返回元素')
 })
 
+test('额度默认可见，定时刷新倒计时，失败清除旧额度，签到查询只发 GET', async () => {
+  const state = []
+  const effects = new Map()
+  const requests = []
+  let clock = Date.now()
+  const resetsAt = clock + 90_000
+  let cursor, card, refresh, refreshDelay, cleared
+  let quotaFails = false
+  const react = {
+    ...ReactStub,
+    useState(init) {
+      const index = cursor++
+      if (!(index in state)) state[index] = typeof init === 'function' ? init() : init
+      return [state[index], value => { state[index] = value }]
+    },
+    useRef(init) { return react.useState(() => ({ current: init }))[0] },
+    useEffect(fn) {
+      const index = cursor++
+      if (!effects.has(index)) effects.set(index, fn())
+    },
+  }
+  const { reg } = runBundle({
+    Date: { now: () => clock },
+    setInterval(callback, delay) { refresh = callback; refreshDelay = delay; return 1 },
+    clearInterval(id) { cleared = id },
+    async fetch(url, init) {
+      requests.push({ url, method: init.method ?? 'GET' })
+      if (url.endsWith('/checkin/status')) {
+        return { ok: true, json: async () => ({ ok: true, state: 'can_sign', message: '可以签到' }) }
+      }
+      assert.equal(url, '/plugins/dsh-doubao-signin/quota')
+      if (quotaFails) return { ok: false, status: 503 }
+      return { ok: true, json: async () => ({
+        ok: true, total: 10, windows: [{ name: '示例', remaining: 10, total: 10, usedPercent: 0, resetsAt }],
+      }) }
+    },
+  })
+  reg.factory(name => name === 'react' ? react : undefined).apply({
+    effect: fn => fn(),
+    locale: { register() {}, bind: () => key => key },
+    slots: {
+      inject(_name, fn) { fn(); return () => {} },
+      register(spec, comp) { if (spec.name === 'settings.section') card = comp; return () => {} },
+    },
+  })
+  const render = () => { cursor = 0; return card({ t: key => key, surface: 'settings' }) }
+  const find = (node, key) => {
+    if (!node || typeof node !== 'object') return undefined
+    if (node.props?.key === key) return node
+    return node.children?.map(child => find(child, key)).find(Boolean)
+  }
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  assert.equal(find(render(), 'panel-credits').props.hidden, false)
+  assert.equal(refreshDelay, 30_000)
+  await settle()
+  assert.match(find(render(), 0).children[0], /2 minutes/)
+
+  clock += 61_000
+  refresh()
+  await settle()
+  assert.match(find(render(), 0).children[0], /1 minutes/)
+  clock += 30_000
+  refresh()
+  await settle()
+  assert.doesNotMatch(find(render(), 0).children[0], /resetIn/)
+  quotaFails = true
+  await find(render(), 'credits-refresh').props.onClick()
+  assert.equal(find(render(), 'total'), undefined)
+  assert.equal(find(render(), 'unreadable').children[0], 'unavailable')
+
+  find(render(), 'tab-checkin').props.onClick()
+  assert.equal(find(render(), 'panel-checkin').props.hidden, false)
+  await find(render(), 'checkin-status').props.onClick()
+  assert.deepEqual(requests.at(-1), { url: '/plugins/dsh-doubao-signin/checkin/status', method: 'GET' })
+  assert.ok(requests.every(request => request.method === 'GET'))
+  assert.equal(find(render(), 'checkin-result').children[1].children[0], '可以签到')
+
+  for (const dispose of effects.values()) dispose?.()
+  assert.equal(cleared, 1)
+})
+
 test('额度路由路径与 Host 侧 routes.js 一致', () => {
   const routes = readFileSync(path.join(ROOT, 'src', 'routes.js'), 'utf8')
   const hostPath = /QUOTA_ROUTE_PATH\s*=\s*'([^']+)'/.exec(routes)?.[1]
@@ -173,4 +257,16 @@ test('卡片只读：没有写操作痕迹', () => {
   // 卡片里唯一的写操作是 checkin/run（POST）——那是显式签到按钮，不是"静默写"
   assert.ok(!/document\.cookie/.test(SRC), '卡片不应碰 cookie')
   assert.ok(SRC.includes('same-origin'), 'fetch 必须同源')
+})
+
+
+/* ===== 模型目录标签页 ===== */
+test('模型标签页列出 15 个豆包模型', () => {
+  assert.match(SRC, /'tab\.catalog': '模型'/, '应有「模型」标签文案')
+  assert.match(SRC, /MODEL_CATALOG = \[/, '应有静态模型目录')
+  assert.match(SRC, /panel\('catalog', modelPanel\)/, '应渲染模型面板')
+  // 数一数 MODEL_CATALOG 里的条目
+  const block = SRC.slice(SRC.indexOf('const MODEL_CATALOG = ['), SRC.indexOf('/** 上下文容量显示成 K'))
+  const rows = (block.match(/\{ id: '/g) ?? []).length
+  assert.equal(rows, 15, '应列出 15 个模型')
 })

@@ -241,8 +241,11 @@ describe('decideState', () => {
     assert.equal(r.ok, true)
   })
 
-  test('有卡片但按钮没了 = 已签到', () => {
-    assert.equal(decideState({ hasCard: true, canSign: false }).state, 'already')
+  test('按钮不可用时无法确认签到，有领取标记才判定已签到', () => {
+    const unknown = decideState({ hasCard: true, canSign: false })
+    assert.equal(unknown.state, 'unknown')
+    assert.equal(unknown.ok, false)
+    assert.equal(decideState({ hasCard: true, rewarded: true }).state, 'already')
   })
 
   test('登录墙', () => {
