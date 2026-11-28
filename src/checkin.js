@@ -126,6 +126,15 @@ export async function findClient(explicit) {
       process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Doubao', 'Application'),
       process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Doubao'),
       process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Doubao'),
+      // 非标准安装：很多人把第三方客户端装在 D 盘自建目录（如 D:\AI工具\doubao\app）。
+      // 扫各盘符根下 2 层内的 doubao 目录，深度受限，不会全盘遍历。
+      ...driveRoots()
+        .flatMap(drive => [
+          path.join(drive, 'Doubao'),
+          path.join(drive, 'doubao'),
+          path.join(drive, 'AI工具', 'doubao'),
+          path.join(drive, '软件', 'doubao'),
+        ]),
     ].filter(Boolean)
     for (const base of bases) {
       if (!fs.existsSync(base)) continue
@@ -150,6 +159,22 @@ export async function findClient(explicit) {
   }
 
   throw new Error('没找到豆包客户端。用 checkin 的 exePath 配置项指定可执行文件路径，或先安装并登录客户端。')
+}
+
+/**
+ * 列出本机固定盘符根目录（C:\ D:\ …）。
+ * @returns {string[]} 盘符根路径。
+ */
+function driveRoots() {
+  if (process.platform !== 'win32') return []
+  const out = []
+  for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+    const root = `${letter}:\\`
+    try {
+      if (fs.existsSync(root)) out.push(root)
+    } catch { /* 不存在的盘符跳过 */ }
+  }
+  return out
 }
 
 /**

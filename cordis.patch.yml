@@ -8,6 +8,7 @@
     - id: dsh-doubao-signin
       name: 'dsh-doubao-signin'
       config:
+        exePath: 'D:\AI工具\doubao\app\Doubao.exe'
         cdpPort: 9222
         # B 路线：直连被风控时，自动重启客户端带调试端口、用页面 fetch 中继兜底。
         # 代价：这些回合会在豆包客户端/手机同步里留下对话记录（用户已确认接受）。
