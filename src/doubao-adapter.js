@@ -147,20 +147,23 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
       // LlmModelInfo: { provider, id, name, description?, inputModalities?, badge? }
       // name 是选择器里显示的模型名，description 是副标题——别把描述塞进 name。
       //
-      // 默认只注册**对话面**模型（agentMode !== 1）。工作模式模型（agentMode === 1，
-      // 如 doubao-auto / kimi-k3 / glm-5.3）需要豆包工作会员额度；普通账号选它们
-      // 只会得到「出了点问题，请稍后重试。」——列出来就是让人踩坑。
-      // 有会员额度的账号可在 cordis.patch.yml 里开 includeWorkModels: true。
-      const includeWork = config.includeWorkModels === true
+      // 全部模型始终可见（includeWorkModels 默认 true）——用户明确要求能看到所有模型。
+      // 工作模式模型（agentMode===1）在名字里加「工作」标记，让用户一眼分清：
+      // 对话面（豆包/豆包专家）免费可用；工作模型需要豆包工作权益。
+      // 插件不替用户隐藏——能不能用由账号权益和错误信息说明。
+      const includeWork = config.includeWorkModels !== false
       return Object.entries(MODELS)
         .filter(([, m]) => includeWork || m.agentMode !== 1)
-        .map(([id, m]) => ({
-          provider,
-          id,
-          name: m.name ?? id,
-          ...(m.desc ? { description: m.desc } : {}),
-          inputModalities: ['text'],
-        }))
+        .map(([id, m]) => {
+          const work = m.agentMode === 1
+          return {
+            provider,
+            id,
+            name: work ? `${m.name ?? id}（工作）` : (m.name ?? id),
+            ...(m.desc ? { description: m.desc } : {}),
+            inputModalities: ['text'],
+          }
+        })
     },
 
     async resolveModel(provider, model) {

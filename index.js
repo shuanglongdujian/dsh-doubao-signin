@@ -87,12 +87,12 @@ export const DEFAULTS = {
    * 是否把「豆包工作」模式的模型（agentMode=1，如 doubao-auto / kimi-k3 / glm-5.3）
    * 也注册进模型选择器。
    *
-   * 默认 false：实测「免费体验」会员（has_active_subscription=true, level=std）
-   * **只有会员身份、没有工作模式的实际额度**——选工作模型一律回「出了点问题」。
-   * v0.8.5 曾基于"有会员身份"错误地默认全开，导致点一个错一个。
-   * 真正开通了工作权益的账号可设为 true。
+   * 默认 true：全部 15 个模型始终可见。隐藏模型是插件替用户做决定，是错的——
+   * 用户明确要求"能看到所有模型"。工作模型能不能跑取决于账号工作权益，
+   * 模型名/描述里标注「工作」，调用失败时错误信息也说明原因，由用户自己选。
+   * 只想看对话面模型可设为 false（留豆包 / 豆包专家）。
    */
-  includeWorkModels: false,
+  includeWorkModels: true,
   openaiGatewayEnabled: false,
   openaiGatewayPort: 8793,
   openaiGatewayModelIds: [],
