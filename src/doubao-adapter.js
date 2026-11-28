@@ -15,6 +15,7 @@
 import { MODELS, buildChatBody, modelReasoningInfo, parseSseLine, renderToolPrompt, extractToolCalls, flattenMessages } from './protocol.js'
 import { directChat } from './direct.js'
 import { lines } from './signer.js'
+import { localSessionTitle } from './session-title.js'
 import { classifyFailure, isDoubaoFallbackReply } from './hardening.js'
 
 /** 注册到选择器的 provider id。 */
@@ -188,6 +189,20 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
     },
 
     async *stream(options) {
+      // —— DSH 自动标题请求：本地产出，零请求、零豆包对话记录 ——
+      // 每开一个新会话 DSH 都会发这种请求；走豆包会在客户端/手机里冒一条
+      // 「简短会话交互」记录（截图实证），还会消耗额度。它在本地就能完成。
+      const localTitle = localSessionTitle(options)
+      if (localTitle !== undefined) {
+        log('标题请求本地生成（未发往豆包）: ' + localTitle.slice(0, 30))
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: localTitle }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: localTitle } }
+        yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
+
       const model = MODELS[options.model] ? options.model : (config.defaultModel ?? 'doubao')
       let upstream
       try {
@@ -211,6 +226,9 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
         }
         throw error
       }
+
+      // 来源标记：每个 DSH→豆包 的对话都在日志里留一行，便于对照豆包客户端里的记录
+      log(`[DSH→豆包] 模型=${model} requestId=${upstream.requestId ?? '-'} 消息数=${(options.messages ?? []).length}`)
 
       // 全文 SSE → 事件数组（postChat/directChat 都是一次性拿全文，无法逐块流式）
       const events = []

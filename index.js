@@ -85,12 +85,14 @@ export const DEFAULTS = {
   accountFailover: true,
   /**
    * 是否把「豆包工作」模式的模型（agentMode=1，如 doubao-auto / kimi-k3 / glm-5.3）
-   * 也注册进模型选择器。默认 true：实测账号有「免费体验」会员
-   * （Local State: has_active_subscription=true, level=std），工作模式可用；
-   * v0.8.3 曾误判为「无会员」而默认隐藏，已纠正。
-   * 没有会员的账号可设为 false 只留对话面模型。
+   * 也注册进模型选择器。
+   *
+   * 默认 false：实测「免费体验」会员（has_active_subscription=true, level=std）
+   * **只有会员身份、没有工作模式的实际额度**——选工作模型一律回「出了点问题」。
+   * v0.8.5 曾基于"有会员身份"错误地默认全开，导致点一个错一个。
+   * 真正开通了工作权益的账号可设为 true。
    */
-  includeWorkModels: true,
+  includeWorkModels: false,
   openaiGatewayEnabled: false,
   openaiGatewayPort: 8793,
   openaiGatewayModelIds: [],
