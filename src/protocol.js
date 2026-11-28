@@ -262,14 +262,35 @@ export function buildChatBody(req) {
       mention_skill_list: '[]',
       mention_plugin_list: '[]',
       mention_ext: '[{}]',
+      // 五元组必须在三处一致（conversation_init_ext / model_config / aggregate_params）
+      // 并镜像到 option / ext。服务端会读其中任意一份，缺任何一个都会**静默降级**
+      // 成普通对话面模型——这正是工作模型"出了点问题"的根因。
+      // 来源：woc-jpg/dsh-plugin-doubao lib/doubao.js buildBody 实测。
+      model_config: {
+        model_item_key: key,
+        model_extra_params: profile.extraParams ?? {},
+        // effort 在三处形态不同：model_config 里是 number，另两处是 string
+        reasoning_effort: Number(effort),
+      },
+      aggregate_params: {
+        mention_skill_list: '[]',
+        mention_plugin_list: '[]',
+        mention_ext: '[{}]',
+        conversation_mode: String(convMode),
+        mode_id: modeId,
+        model_item_key: key,
+        agent_mode: String(agentMode),
+        reasoning_effort: effort,
+        provider_id: '',
+      },
+      recovery_option: {
+        is_recovery: false,
+        req_create_time_sec: Math.floor(Date.now() / 1000),
+        append_sse_event_scene: 0,
+      },
       conversation_mode: convMode,
-      mode_id: modeId,
-      model_item_key: key,
-      reasoning_effort: effort,
-      provider_id: '',
+      unique_key: globalThis.crypto.randomUUID(),
     },
-    conversation_mode: convMode,
-    unique_key: globalThis.crypto.randomUUID(),
     user_context: [],
     ext: {
       agent_mode: String(agentMode),
@@ -280,11 +301,6 @@ export function buildChatBody(req) {
       conversation_init_option: '{"need_ack_conversation":true}',
       commerce_credit_config_enable: '0',
     },
-  }
-
-  // model_extra_params 原样转发——它告诉服务端预留多少内存（不转发会被压到小窗口）
-  if (profile.extraParams) {
-    body.model_extra_params = { ...profile.extraParams }
   }
 
   return body

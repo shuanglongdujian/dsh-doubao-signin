@@ -121,8 +121,11 @@ test('Harness 按中档准备豆包自动，转发工作任务请求并收到模
   const adapter = makeAdapter(async (body, requestSignal) => {
     assert.equal(requestSignal, signal)
     assert.equal(body.option.conversation_init_ext.model_item_key, '9')
+    assert.equal(body.option.model_config.model_item_key, '9')
+    assert.equal(body.option.aggregate_params.model_item_key, '9')
     assert.equal(body.option.agent_mode, 1)
-    assert.equal(body.option.reasoning_effort, '8')
+    assert.equal(body.option.conversation_init_ext.reasoning_effort, '8')
+    assert.equal(body.option.aggregate_params.reasoning_effort, '8')
     requests++
     return 'data: {"content":{"content_block":[{"block_type":10000,"content":{"text_block":{"text":"模拟回复"}}}]}}\n'
   })
