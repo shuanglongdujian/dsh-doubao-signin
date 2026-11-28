@@ -22,7 +22,7 @@ import { createDoubaoAdapter, PROVIDER } from '../src/doubao-adapter.js'
 function makeAdapter(sse, opts = {}) {
   const calls = []
   const adapter = createDoubaoAdapter({
-    config: { defaultModel: 'doubao', directFirst: false, ...opts.config },
+    config: { defaultModel: 'doubao', directFirst: false, includeWorkModels: true, ...opts.config },
     getIdentity: () => ({ found: false }),
     cookieSource: async () => ({ header: '', source: 'none', ready: false }),
     ensureSigner: async () => ({
@@ -59,21 +59,23 @@ test('providerInfo 返回合法的 id/name', () => {
 test('listModels 非空且 provider 匹配（空数组会被选择器过滤）', async () => {
   const { adapter } = makeAdapter('')
   const models = await adapter.listModels('doubao')
-  assert.ok(models.length >= 2)
+  assert.ok(models.length >= 15)
   for (const m of models) {
     assert.equal(m.provider, 'doubao')
     assert.ok(m.id && m.name)
   }
-  // 默认只列对话面模型（免费可用），工作模式模型（需会员额度）默认隐藏
+  // v0.8.5 纠正：账号有「免费体验」会员（has_active_subscription=true），
+  // 工作模式模型默认也应出现在选择器里；v0.8.3 误判为无会员而隐藏 13 个模型。
   assert.ok(models.some(m => m.id === 'doubao'))
-  assert.ok(!models.some(m => m.id === 'doubao-auto'), '工作模式模型默认不该出现在选择器里')
+  assert.ok(models.some(m => m.id === 'doubao-auto'), '工作模式模型默认应出现在选择器里')
 })
 
-test('includeWorkModels: true 时才注册工作模式模型', async () => {
-  const { adapter } = makeAdapter('', { config: { includeWorkModels: true } })
+test('includeWorkModels: false 才隐藏工作模式模型', async () => {
+  const { adapter } = makeAdapter('', { config: { includeWorkModels: false } })
   const models = await adapter.listModels('doubao')
-  assert.ok(models.some(m => m.id === 'doubao-auto'), '开启后应包含工作模式模型')
-  assert.ok(models.length >= 15)
+  assert.ok(!models.some(m => m.id === 'doubao-auto'), '关闭后应隐藏工作模式模型')
+  assert.ok(models.some(m => m.id === 'doubao'), '对话面模型始终保留')
+  assert.ok(models.length === 2)
 })
 
 test('resolveModel 给上下文窗口', async () => {
