@@ -139,7 +139,7 @@ export function buildDirectHeaders(cookieHeader) {
  * @param {AbortSignal} [opts.signal] - 取消信号。
  * @param {object} [opts.env] - 环境变量（测试可注入）。
  * @param {typeof fetch} [opts.fetchImpl] - fetch 注入（测试用）。
- * @returns {Promise<{ok: true, sse: string}|{ok: false, kind: 'risk'|'auth'|'http', message: string, status?: number}>} 结果。
+ * @returns {Promise<{ok: true, sse: string, requestId?: string}|{ok: false, kind: 'risk'|'auth'|'http', message: string, status?: number}>} 结果。
  */
 export async function directChat(opts) {
   const { body, identity, getCookie, signal, env = process.env, fetchImpl = fetch } = opts
@@ -194,7 +194,8 @@ export async function directChat(opts) {
       status: res.status,
     }
   }
-  return { ok: true, sse: text }
+  const requestId = res.headers?.get?.('x-tt-logid')
+  return { ok: true, sse: text, ...(/^[A-Za-z0-9._-]{12,128}$/.test(requestId ?? '') ? { requestId } : {}) }
 }
 
 /** 与 protocol.js 的 bot id 对齐导出（直连 body 构造复用主路径）。 */

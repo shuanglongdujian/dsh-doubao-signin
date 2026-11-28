@@ -103,7 +103,12 @@ test('directChat：健康响应返回 SSE', async () => {
   const calls = []
   const fakeFetch = async (url, init) => {
     calls.push({ url, init })
-    return { ok: true, status: 200, text: async () => 'data: {"text":"hi"}\n\n' }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'x-tt-logid': 'fixture-logid-1234' }),
+      text: async () => 'data: {"text":"hi"}\n\n',
+    }
   }
   const r = await directChat({
     body: { ping: 1 },
@@ -113,6 +118,7 @@ test('directChat：健康响应返回 SSE', async () => {
   })
   assert.equal(r.ok, true)
   assert.ok(r.sse.includes('hi'))
+  assert.equal(r.requestId, 'fixture-logid-1234')
   assert.equal(calls.length, 1)
   assert.ok(calls[0].url.startsWith('https://www.doubao.com/chat/completion?'))
   assert.equal(calls[0].init.method, 'POST')

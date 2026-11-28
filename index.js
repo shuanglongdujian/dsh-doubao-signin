@@ -33,6 +33,7 @@ import {
   applyPromptBudget,
   cleanForWire,
   classifyFailure,
+  isDoubaoFallbackReply,
   createRefusalTracker,
   isRefusal,
 } from './src/hardening.js'
@@ -715,7 +716,7 @@ export async function apply(ctx, rawConfig = {}) {
       exec?.signal?.removeEventListener('abort', onAbort)
 
       // 审核拦截识别：不让 canned 文案冒充模型回答
-      if (isRefusal(text)) {
+      if (isRefusal(text) || isDoubaoFallbackReply(text)) {
         const fail = classifyFailure(text)
         const e = new Error(fail.message)
         e.kind = fail.kind

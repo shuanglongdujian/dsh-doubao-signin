@@ -142,6 +142,18 @@ test('stream：风控错误 710022004 抛出可读异常', async () => {
   )
 })
 
+test('stream：保留后续上游帧里的错误码，不回显内部响应内容', async () => {
+  const { adapter } = makeAdapter([
+    'data: {"meta":"initial"}',
+    'data: {"data":{"error_code":710099999,"error_msg":"internal fixture detail"}}',
+    'data: [DONE]',
+  ].join('\n'))
+  await assert.rejects(
+    () => collect(adapter.stream({ model: 'doubao', messages: [] })),
+    { code: 'DOUBAO_UPSTREAM_ERROR', message: '豆包上游返回错误码 710099999。' },
+  )
+})
+
 test('stream：system 消息被前置进 messages', async () => {
   const { adapter, calls } = makeAdapter('data: [DONE]\n')
   await collect(adapter.stream({

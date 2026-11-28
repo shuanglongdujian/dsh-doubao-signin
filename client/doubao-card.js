@@ -41,9 +41,9 @@ window.__ModuleLoader__.load({
      * 真实请求以 Host 侧的 MODELS 为准——改那边时记得同步这里。
      */
     const MODEL_CATALOG = [
-      { id: 'doubao', name: '豆包', key: '0', work: false, ctx: 131072, levels: '3/4/5' },
+      { id: 'doubao', name: '豆包', key: '0', work: false, ctx: 131072, levels: '—' },
       { id: 'doubao-expert', name: '豆包 专家', key: '3', work: false, ctx: 131072, levels: '3/4/5' },
-      { id: 'doubao-auto', name: '豆包 自动', key: '9', work: true, ctx: 262144, levels: '3/4/5' },
+      { id: 'doubao-auto', name: '豆包 自动', key: '9', work: true, ctx: 262144, levels: '3/8/5' },
       { id: 'doubao-2.1-lite', name: '豆包 2.1 Lite', key: 'seed-lite-7b', work: true, ctx: 262144, levels: '3/4/5' },
       { id: 'doubao-2.1-pro', name: '豆包 2.1 Pro', key: '5', work: true, ctx: 262144, levels: '3/4/5' },
       { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', key: 'person-deepseek-v4-1-flash-261017', work: true, ctx: 300000, levels: '3–7' },

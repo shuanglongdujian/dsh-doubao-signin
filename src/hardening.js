@@ -221,6 +221,10 @@ export const FailureKind = {
   UPSTREAM: 'upstream',
 }
 
+export function isDoubaoFallbackReply(text) {
+  return /^出了点问题[，,]\s*请稍后重试[。.!！]?$/.test(String(text ?? '').trim())
+}
+
 /**
  * 从上游响应文本里分类错误。
  * @param {string} body - SSE 原文或错误文本。
@@ -228,6 +232,9 @@ export const FailureKind = {
  */
 export function classifyFailure(body) {
   const s = String(body ?? '')
+  if (isDoubaoFallbackReply(s)) {
+    return { kind: FailureKind.UPSTREAM, message: '豆包上游只返回了通用失败提示，未提供具体错误码。' }
+  }
   const codeHit = /710022004/.exec(s)
   if (codeHit) return { kind: FailureKind.RISK, code: RISK_CODE, message: '上游风控要求人机验证（710022004）。在豆包客户端里完成一次滑块/验证后即可恢复；插件在冷却期内不再自动发请求。' }
   if (isRefusal(s)) return { kind: FailureKind.MODERATED, message: '豆包内容审核拦截了本次请求（不是模型故障）。换一种措辞或减少注入内容后重试。' }

@@ -64,17 +64,32 @@ describe('buildChatBody', () => {
   test('模型形态四元组取自模型档案（modeId/agentMode/convMode/effort）', () => {
     const body = buildChatBody({ model: 'doubao-auto', messages: [{ role: 'user', content: 'hi' }] })
     assert.equal(body.option.mode_id, '3')
-    assert.equal(body.option.agent_mode, '1')
+    assert.equal(body.option.agent_mode, 1)
+    assert.equal(body.ext.agent_mode, '1')
     assert.equal(body.option.conversation_mode, 3)
     assert.equal(body.option.reasoning_effort, '3')
     assert.equal(body.option.model_item_key, '9')
     assert.equal(body.conversation_mode, 3)
   })
 
+  test('豆包自动的工作任务请求按模型目录映射低中高档位', () => {
+    for (const [reasoningEffort, expected] of [[undefined, '3'], ['low', '3'], ['medium', '8'], ['high', '5'], [8, '8'], ['max', '3']]) {
+      const body = buildChatBody({ model: 'doubao-auto', messages: [], reasoningEffort })
+      assert.deepEqual(body.option.conversation_init_ext, { model_item_key: '9', mode_id: '3', reasoning_effort: expected })
+      assert.equal(body.option.reasoning_effort, expected)
+    }
+  })
+
+  test('各模型只接受自己支持的思考档位', () => {
+    assert.equal(buildChatBody({ model: 'doubao-2.1-pro', messages: [], reasoningEffort: 'medium' }).option.reasoning_effort, '4')
+    assert.equal(buildChatBody({ model: 'glm-5.3', messages: [], reasoningEffort: 'max' }).option.reasoning_effort, '7')
+    assert.equal(buildChatBody({ model: 'glm-5.3', messages: [], reasoningEffort: 'medium' }).option.reasoning_effort, '3')
+  })
+
   test('对话面模型用 mode 1 / agent_mode 2', () => {
     const body = buildChatBody({ model: 'doubao', messages: [] })
     assert.equal(body.option.mode_id, '1')
-    assert.equal(body.option.agent_mode, '2')
+    assert.equal(body.option.agent_mode, 2)
     assert.equal(body.option.conversation_mode, 1)
     assert.equal(body.option.model_item_key, '0')
   })

@@ -12,8 +12,7 @@
  * - `itemKey`：上线路由键（请求里 `model_item_key` 就是它）；
  * - `modeId`/`agentMode`/`convMode`：请求形态的三元组（**必须整体一致**——
  *   客户端切换模型时这三个一起变；只改一个会让上游按错的形态应答）；
- * - `effort`：思考档位（豆包每模型的档位不同：GLM 是 3/5/7，Qwen 是 3/5/6，
- *   统一成 3/4/5 会出现"模型拒绝该档位"）；
+ * - `effort`：默认思考档位，`levels` 记录各模型实际支持的档位和顺序；
  * - `extraParams`：`model_extra_params`，要**原样转发**——它告诉服务端预留多少内存。
  *
  * 有客户端（能从 `Local State` 读到 device_id）时可以动态拉取菜单刷新这份表；
@@ -27,7 +26,7 @@ export const MODELS = {
   'doubao': {
     kind: 'chat', itemKey: '0', name: '豆包', desc: '豆包快速',
     modeId: '1', agentMode: 2, convMode: 1, effort: 3, deepThink: 0,
-    levels: [3, 4, 5], extraParams: undefined, contextWindow: 131_072,
+    levels: [], extraParams: undefined, contextWindow: 131_072,
   },
   'doubao-expert': {
     kind: 'chat', itemKey: '3', name: '豆包 专家', desc: '豆包专家模式',
@@ -37,7 +36,7 @@ export const MODELS = {
   'doubao-auto': {
     kind: 'chat', itemKey: '9', name: '豆包 自动', desc: '豆包工作自动路由（会员额度）',
     modeId: '3', agentMode: 1, convMode: 3, effort: 3, deepThink: 9,
-    levels: [3, 4, 5], extraParams: { total_window_size: '256000' }, contextWindow: 256_000,
+    levels: [3, 8, 5], extraParams: { total_window_size: '256000' }, contextWindow: 256_000,
   },
   'doubao-2.1-lite': {
     kind: 'chat', itemKey: 'seed-lite-7b', name: '豆包 2.1 Lite', desc: '轻量（限时优惠 0.01x）',
@@ -112,6 +111,25 @@ export const MODELS = {
     levels: [3, 5, 6],
     extraParams: { memory_profile: '300k_230', total_window_size: '300000' }, contextWindow: 300_000,
   },
+}
+
+const REASONING_LEVELS = {
+  3: { id: 'low', name: '低' },
+  4: { id: 'medium', name: '中' },
+  5: { id: 'high', name: '高' },
+  6: { id: 'xhigh', name: '极高' },
+  7: { id: 'max', name: '最高' },
+  8: { id: 'medium', name: '中' },
+}
+
+/** 将模型档位目录转换成 Harness 使用的档位和默认值。 */
+export function modelReasoningInfo(model) {
+  const profile = MODELS[model]
+  if (!profile?.levels?.length) return undefined
+  return {
+    efforts: profile.levels.map(level => ({ ...REASONING_LEVELS[level] })),
+    defaultEffort: REASONING_LEVELS[profile.effort].id,
+  }
 }
 
 /** 默认模型（对话面、速度最快）。 */
@@ -196,7 +214,11 @@ export function buildChatBody(req) {
   const modeId = profile.modeId ?? '1'
   const agentMode = profile.agentMode ?? 2
   const convMode = profile.convMode ?? 1
-  const effort = String(profile.effort ?? req.reasoningEffort ?? '3')
+  const requested = req.reasoningEffort
+  const requestedLevel = profile.levels?.find(level => (
+    requested === REASONING_LEVELS[level].id || requested === level || requested === String(level)
+  ))
+  const effort = String(requestedLevel ?? profile.effort ?? 3)
   const deepThink = profile.deepThink ?? 0
 
   const body = {
@@ -243,7 +265,6 @@ export function buildChatBody(req) {
       conversation_mode: convMode,
       mode_id: modeId,
       model_item_key: key,
-      agent_mode: String(agentMode),
       reasoning_effort: effort,
       provider_id: '',
     },

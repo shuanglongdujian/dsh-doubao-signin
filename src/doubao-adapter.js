@@ -4,18 +4,40 @@
  * 契约来自本机源码实读（dsh-llm/src/index.ts:416 registerAdapter）：
  * - inject 加 'llm'，注册 handler 只调 providerInfo / providerRetryPolicy；
  * - listModels 返回非空数组才会进入选择器（空数组 = 分组被过滤）；
+ * - prepareCall 将解析后的模型信息与本适配器的流式调用绑定；
+ * - 上下文预算检查还会读取图片估算和尺寸投影接口；
  * - stream(options) 是核心：输入 GenerateOptions，产出 StreamChunk；
  * - block-start/block-end 成对，usage 在 finish 前，finish 最后；
  * - 纯手写对象即可（our-free-model 已跑通），不需要 extends / pi-ai / 新 peerDependency。
  *
  * @module src/doubao-adapter.js
  */
-import { MODELS, buildChatBody, parseSseLine, renderToolPrompt, extractToolCalls, flattenMessages } from './protocol.js'
+import { MODELS, buildChatBody, modelReasoningInfo, parseSseLine, renderToolPrompt, extractToolCalls, flattenMessages } from './protocol.js'
 import { directChat } from './direct.js'
 import { lines } from './signer.js'
+import { classifyFailure, isDoubaoFallbackReply } from './hardening.js'
 
 /** 注册到选择器的 provider id。 */
 export const PROVIDER = 'doubao'
+
+function upstreamErrorCode(frame) {
+  let data = frame?.event_data ?? frame?.eventData ?? frame?.data
+  if (typeof data === 'string' && data.trimStart().startsWith('{')) {
+    try { data = JSON.parse(data) } catch { data = undefined }
+  }
+  for (const details of [frame, frame?.error, data, data?.error]) {
+    if (!details || typeof details !== 'object') continue
+    if (/^[1-9]\d{0,9}$/.test(details.error_code ?? '')) return String(details.error_code)
+    if (/^710\d{6}$/.test(details.code ?? '')) return String(details.code)
+  }
+  return undefined
+}
+
+const UPSTREAM_ERROR_MESSAGES = {
+  '710012001': '豆包登录已失效（710012001）。',
+  '710020202': '豆包拒绝了本次请求参数（710020202）。',
+  '710022004': '豆包上游要求完成账号验证（710022004）。',
+}
 
 /**
  * 创建豆包 adapter。
@@ -32,7 +54,7 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
    * 选路并拿 SSE 原文：直连优先（有设备身份时），否则 CDP 签名桥。
    * @param {string} model - 模型 id。
    * @param {object} options - GenerateOptions。
-   * @returns {Promise<string>} SSE 原文。
+   * @returns {Promise<{sse: string, requestId?: string}>} SSE 原文与上游请求编号。
    */
   async function pickRaw(model, options) {
     const msgs = options.system
@@ -55,7 +77,7 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
         getCookie: async () => (await cookieSource()).header,
         signal: options.signal,
       })
-      if (r.ok) return r.sse
+      if (r.ok) return r
       if (r.kind === 'auth') {
         // 凭据过期：静默续期（不弹窗），再试一次
         const { ensureSession } = await import('./session.js')
@@ -69,7 +91,7 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
           getCookie: async () => (await cookieSource()).header,
           signal: options.signal,
         })
-        if (retry.ok) return retry.sse
+        if (retry.ok) return retry
         log(`直连续期后仍失败(${retry.kind}): ${retry.message}`)
       } else {
         log(`直连失败(${r.kind})，降级 CDP 签名桥: ${r.message}`)
@@ -77,7 +99,7 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
     }
 
     const client = await ensureSigner()
-    return client.postChat(body, options.signal)
+    return { sse: await client.postChat(body, options.signal) }
   }
 
   return {
@@ -112,6 +134,14 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
       })
     },
 
+    imageRequestPricing() {
+      return undefined
+    },
+
+    imageRequestTarget(_provider, _model, image) {
+      return { width: image.width, height: image.height, maxBytes: image.bytes }
+    },
+
     async listModels(provider) {
       // LlmModelInfo: { provider, id, name, description?, inputModalities?, badge? }
       // name 是选择器里显示的模型名，description 是副标题——别把描述塞进 name。
@@ -126,21 +156,34 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
 
     async resolveModel(provider, model) {
       const known = MODELS[model]
+      const reasoning = modelReasoningInfo(model)
       return {
         provider,
         id: model,
         name: known?.name ?? model,
         ...(known?.desc ? { description: known.desc } : {}),
+        inputModalities: ['text'],
+        ...(reasoning ? { reasoning } : {}),
         context: { contextWindow: known?.contextWindow ?? 131_072 },
         defaultMaxTokens: 32_768,
       }
     },
 
+    async prepareCall(provider, model, signal) {
+      signal?.throwIfAborted()
+      const modelInfo = await this.resolveModel(provider, model, signal)
+      signal?.throwIfAborted()
+      return {
+        model: modelInfo,
+        stream: options => this.stream(options),
+      }
+    },
+
     async *stream(options) {
       const model = MODELS[options.model] ? options.model : (config.defaultModel ?? 'doubao')
-      let raw
+      let upstream
       try {
-        raw = await pickRaw(model, options)
+        upstream = await pickRaw(model, options)
       } catch (error) {
         // 两条路都不通时，把「怎么办」说清楚——网页直连被风控 + 没有客户端签名器
         const msg = String(error?.message ?? error)
@@ -163,29 +206,28 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
 
       // 全文 SSE → 事件数组（postChat/directChat 都是一次性拿全文，无法逐块流式）
       const events = []
-      for await (const line of lines(raw)) {
+      for await (const line of lines(upstream.sse)) {
         const ev = parseSseLine(line)
         if (ev) events.push(ev)
       }
 
-      // 上游错误码检测（风控/审核/无效参数）——以 finish error 结束，带可读原因
-      const errEv = events.find(e => e.kind === 'unknown' && e.raw && typeof e.raw === 'object')
-      if (errEv) {
-        const code = Number(errEv.raw?.error_code ?? errEv.raw?.code ?? 0)
-        if (code === 710022004) {
-          throw new Error('豆包风控要求人机验证（710022004）。请在豆包客户端过一次滑块，或改用已登录客户端的签名桥。')
-        }
-        if (code === 710020202) {
-          throw new Error('豆包拒绝了请求体（710020202 common invalid param）。可能协议改版或该模型当前不可用。')
-        }
+      const providerCode = events.map(event => upstreamErrorCode(event.raw)).find(Boolean)
+      const replyText = events.filter(event => event.kind === 'text').map(event => event.text).join('')
+      if (providerCode || isDoubaoFallbackReply(replyText)) {
+        const message = providerCode
+          ? (UPSTREAM_ERROR_MESSAGES[providerCode] ?? '豆包上游返回错误码 ' + providerCode + '。')
+          : classifyFailure(replyText).message
+        const code = 'DOUBAO_UPSTREAM_ERROR'
+        const requestId = upstream.requestId
+        log('豆包调用失败（' + model + '）：' + message)
+        throw Object.assign(new Error(message), { code, failure: { code, message, ...(requestId ? { requestId } : {}) } })
       }
 
       let idx = 0
 
       // 工具调用：文本仿真 → 解析 → tool-call 块
       if (options.tools?.length) {
-        const text = events.filter(e => e.kind === 'text').map(e => e.text).join('')
-        const parsed = extractToolCalls(text)
+        const parsed = extractToolCalls(replyText)
         if (parsed.text?.trim()) {
           const t = parsed.text.trim()
           yield { type: 'block-start', index: idx, blockType: 'text' }
