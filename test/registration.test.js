@@ -10,12 +10,21 @@
  * 跑：node --test test/registration.test.js
  */
 import assert from 'node:assert/strict'
-import { test, describe } from 'node:test'
+import { test, describe, after } from 'node:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'doubao-registration-'))
+const previousHome = process.env.DSH_HOME
+process.env.DSH_HOME = testHome
+after(() => {
+  if (previousHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = previousHome
+  fs.rmSync(testHome, { recursive: true, force: true })
+})
 const DSH_ROOT = 'D:\\AI工具\\deepseek harness\\harness\\resources\\app\\dsh'
 
 // 核心包只在 DSH 安装目录里，装载测试从那里借校验器；插件自身不依赖它们。
@@ -70,7 +79,7 @@ async function load(config = {}) {
     llm,
     logger: { info() {}, warn() {}, error() {} },
   }
-  await mod.apply(ctx, { exePath: path.join(here, 'nope', 'Doubao.exe'), ...config })
+  await mod.apply(ctx, { exePath: path.join(here, 'nope', 'Doubao.exe'), autoCheckin: false, ...config })
   return tools.registered
 }
 
@@ -118,7 +127,7 @@ describe('插件装载', () => {
     const mod = await import('../index.js')
     const tools = makeTools()
     const llm = makeLlm()
-    await mod.apply({ tools, llm, logger: { info() {}, warn() {}, error() {} } }, {})
+    await mod.apply({ tools, llm, logger: { info() {}, warn() {}, error() {} } }, { autoCheckin: false })
     assert.ok(llm.adapters.doubao, '应注册 doubao provider')
     const models = await llm.adapters.doubao.listModels('doubao')
     assert.ok(models.length > 0, 'listModels 返回空数组 = 分组被选择器过滤掉')
@@ -221,14 +230,9 @@ describe('execute 的降级行为', () => {
     const tools = await load()
     const ck = tools.find(t => t.definition.name === 'doubao_checkin').definition
     const result = await ck.execute({ dryRun: true }, { signal: undefined })
-    // 有凭据 → 返回真实只读状态；无凭据 → unlogged。两种情况都是结构化结果，不抛错。
+    // 隔离的 profile 无凭据，查询在发网络请求前返回。
     assert.equal(typeof result.ok, 'boolean')
-    assert.ok(
-      ['unlogged', 'already', 'can_sign', 'ineligible', 'no_task', 'error'].includes(result.state),
-      `意外状态 ${result.state}`,
-    )
-    // 核心保证：dryRun 绝不能返回"签到成功"，也绝不能发领取接口
-    assert.notEqual(result.state, 'signed')
+    assert.equal(result.state, 'unlogged')
   })
 
   test('checkin 真签到且无客户端时明确拒绝（网页代签会作废额度）', async () => {
@@ -243,7 +247,7 @@ describe('execute 的降级行为', () => {
   })
 
   test('chat 失败时报能指导下一步的错误（凭据/通道/风控），不是笼统异常', async () => {
-    const tools = await load()
+    const tools = await load({ directFirst: false })
     const chat = tools.find(t => t.definition.name === 'doubao_chat').definition
     try {
       const r = await chat.execute({ prompt: 'hi' }, { signal: undefined })

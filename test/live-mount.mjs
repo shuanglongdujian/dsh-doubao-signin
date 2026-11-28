@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs'
 
 const DSH_ROOT = 'D:\\AI工具\\deepseek harness\\harness\\resources\\app\\dsh'
 const url = p => pathToFileURL(path.join(DSH_ROOT, p)).href
+process.env.DSH_DOUBAO_DEBUG = '0'
 
 const { Context } = await import(url('node_modules/@deepseek-ai/cordis/lib/index.js'))
 const { assertSupportedJsonSchema } = await import(url('node_modules/@deepseek-ai/dsh-tools/lib/types/json-schema.js'))
@@ -42,7 +43,7 @@ function makeTools() {
 const mod = await import(pathToFileURL(path.join(import.meta.dirname, '..', 'index.js')).href)
 
 /** 真实配置形状：模拟 patch 里给的那几项。 */
-const CONFIG = { cdpPort: 9222, relaunchClient: false, autoDiscoverClient: true }
+const CONFIG = { autoCheckin: false }
 
 /* ===== 第一遍：真 cordis Context 下挂载 ===== */
 
@@ -72,37 +73,7 @@ for (const [toolName, def] of registered) {
   assert.deepEqual(def.presentCall(args), def.presentCall(args), `${toolName} presentCall 不纯`)
 }
 
-// status 是唯一能离线跑完的：缺客户端时应返回结构化摘要，而不是抛
-const status = registered.get('doubao_status')
-const result = await status.execute({}, { signal: new AbortController().signal })
-assert.equal(typeof result.summary, 'string')
-assert.ok(result.summary.length > 0)
-console.log('\nstatus 实跑结果:\n' + result.summary)
-
-// checkin dryRun：只读 Cookie 查询，有凭据时返回真实状态，无凭据时 unlogged——都不抛错、绝不做写操作
-const checkin = registered.get('doubao_checkin')
-const ck = await checkin.execute({ dryRun: true }, { signal: new AbortController().signal })
-assert.equal(typeof ck.ok, 'boolean')
-assert.ok(
-  ['unlogged', 'already', 'can_sign', 'ineligible', 'no_task', 'error'].includes(ck.state),
-  `意外状态 ${ck.state}`,
-)
-assert.notEqual(ck.state, 'signed', 'dryRun 绝不能返回签到成功')
-console.log(`\ncheckin 实跑状态: [${ck.state}] ${ck.message}`)
-
-// chat：v0.7 起有扫码凭据就能直连（不再强制依赖客户端）。
-// 没有凭据时报「凭据/通道」相关的清晰错误——不能是笼统的"undefined is not valid JSON"。
 const chat = registered.get('doubao_chat')
-try {
-  const r = await chat.execute({ prompt: 'hi' }, { signal: new AbortController().signal })
-  // 有凭据：能跑通（可能因上游风控失败，但那是有意义的业务错误）
-  assert.ok(r && typeof r.text === 'string', '成功时应返回文本')
-} catch (error) {
-  assert.ok(
-    /凭据|cookie|登录|通道|客户端|风控|人机验证|额度/.test(String(error.message)),
-    `错误信息要说清怎么办，实际: ${error.message}`,
-  )
-}
 
 // chat 对未知模型提前报错，不去碰网络
 await assert.rejects(
@@ -137,7 +108,7 @@ await assert.rejects(
   assert.equal(t.registered.size, 6)
 }
 
-console.log('\n✅ 真 cordis Context 挂载通过：6 个工具、schema 合规、降级路径正常、两种 logger 形态兼容')
+console.log('\n✅ 真 cordis Context 挂载通过：6 个工具、schema 合规、未知模型校验、两种 logger 形态兼容')
 void DSH_ROOT
 /* ===== 第五遍：webServer 路由注册契约（our-free-model 记录过的坑） ===== */
 {
@@ -171,7 +142,7 @@ void DSH_ROOT
   console.log('\n✅ webServer inject 回调作用域无未定义变量')
 }
 
-/* ===== 第七遍：真 cordis + webServer 服务 → inject 回调必须注册出 5 条路由 ===== */
+/* ===== 第七遍：真 cordis + webServer 服务 → inject 回调必须注册卡片路由 ===== */
 {
   const app2 = new Context()
   app2.provide('tools')
@@ -183,24 +154,24 @@ void DSH_ROOT
   app2.provide('webServer')
   app2.set('webServer', { register: entry => { routes.push(entry); return () => {} } })
 
-  const mod2 = await import('file:///D:/AI%E5%B7%A5%E5%85%B7/deepseek%20harness/github%E9%A1%B9%E7%9B%AE/dsh-doubao-signin/index.js')
-  await mod2.apply(app2, {})
+  await mod.apply(app2, CONFIG)
 
   // inject 回调在 webServer ACTIVE 时应同步触发
   await new Promise(resolve => setTimeout(resolve, 100))
 
   const paths = routes.map(r => r.path).sort()
-  assert.ok(paths.length >= 5, `webServer 就绪后应注册至少 5 条路由，实际 ${paths.length}: ${JSON.stringify(paths)}`)
+  assert.ok(paths.length >= 6, `webServer 就绪后应注册至少 6 条路由，实际 ${paths.length}: ${JSON.stringify(paths)}`)
   for (const p of [
     '/plugins/dsh-doubao-signin/quota',
     '/plugins/dsh-doubao-signin/checkin/run',
+    '/plugins/dsh-doubao-signin/checkin/status',
     '/plugins/dsh-doubao-signin/login/start',
     '/plugins/dsh-doubao-signin/login/poll',
     '/plugins/dsh-doubao-signin/login/cancel',
   ]) {
     assert.ok(paths.includes(p), `缺路由: ${p}`)
   }
-  console.log('\n✅ 真 cordis：webServer 就绪后 5 条 loopback 路由全部注册')
+  console.log('\n✅ 真 cordis：webServer 就绪后 6 条 loopback 路由全部注册')
 }
 
 /* ===== 第八遍：真 cordis 里 llm provider 注册（模型进选择器的前提） ===== */
@@ -225,9 +196,8 @@ void DSH_ROOT
     },
   })
 
-  const mod3 = await import('file:///D:/AI%E5%B7%A5%E5%85%B7/deepseek%20harness/github%E9%A1%B9%E7%9B%AE/dsh-doubao-signin/index.js')
-  assert.ok(mod3.inject.includes('llm'), 'inject 必须声明 llm——否则 ctx.llm 读不到')
-  await mod3.apply(app3, {})
+  assert.ok(mod.inject.includes('llm'), 'inject 必须声明 llm——否则 ctx.llm 读不到')
+  await mod.apply(app3, CONFIG)
 
   assert.ok(adapters.doubao, '应注册 doubao provider')
   const models = await adapters.doubao.listModels('doubao')

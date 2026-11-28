@@ -1,6 +1,12 @@
 node_modules/
 *.log
 .env
+.env.*
+!.env.example
+.credentials.*
+cookie*.json
+*.pem
+*.pfx
 .DS_Store
 dist/
 coverage/

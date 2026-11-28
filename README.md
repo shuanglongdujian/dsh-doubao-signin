@@ -173,6 +173,33 @@ doubao_accounts            # 看池子 + 每个账号的剩余额度
 
 服务端虽然会在 `SSE_ACK` 里回 `conversation_info`（`name: "新对话"`），但那个 id **不在会话列表里**、单独查也是 404——它不是一条真实记录，客户端只是本地显示了它。
 
+## 本机 OpenAI 兼容接口（火山方舟）
+
+网关默认关闭。要启用，在本插件的 `cordis.patch.yml` 里找到 `dsh-doubao-signin` 项，
+将以下内容加进其现有的 `config`，保留同级的其它设置。
+
+```yaml
+openaiGatewayEnabled: true
+openaiGatewayPort: 8793
+openaiGatewayModelIds: []
+```
+
+启动 DSH 的环境需要两个 Key：
+
+- `ARK_API_KEY` 是火山方舟的 API Key，用于调用已开通的模型服务。 [方舟 Chat API](https://docs.volcengine.com/docs/ark/chat-api?lang=zh)
+- `DOUBAO_GATEWAY_KEY` 是给本机网关单独设置的 Key，供外部客户端使用。
+
+重启 DSH 后，外部客户端的 Base URL 填 `http://127.0.0.1:8793/v1`，Key 填
+`DOUBAO_GATEWAY_KEY` 的值。若旧 Python 网关已占用 8793，改用其它本机端口。
+
+`GET /v1/models` 默认从方舟获取当前账号可见的文本生成模型，缓存一分钟。
+可见目录和模型的开通状态需分别核对。若只想提供指定模型，或使用方舟的 `ep-...` 接入点，
+将对应 ID 填入 `openaiGatewayModelIds`，网关就按该清单提供服务。 [方舟 Models API](https://docs.volcengine.com/docs/ark/models-api?lang=zh)
+
+`POST /v1/chat/completions` 支持纯文本聊天。SSE 逐块转发方舟返回的数据，保留结束原因
+以及上游返回的用量。网关只调用方舟 Chat API。真实模型调用使用方舟账号的权限和计费。
+本机测试使用模拟方舟响应，挂载时只注册端口。
+
 ## 在模型选择器里用豆包（v0.6.0 起）
 
 装完重启 DSH，**模型选择器里会出现「豆包 Doubao」分组**，7 个模型：
@@ -301,7 +328,7 @@ doubao_accounts            # 看池子 + 每个账号的剩余额度
 
 ```sh
 node --test              # 187 个离线用例（协议/签名缓存/健壮性/额度解析/直连与身份/路由闸门/工具装载/打包防呆）
-node test/live-mount.mjs # 真 cordis Context 下挂载验证
+node test/live-mount.mjs # 真 cordis Context 下挂载验证，不发送聊天或签到请求
 ```
 
 测试不联网、不需要豆包客户端：网络层全部走注入，协议逻辑纯函数。装载测试直接从 DSH 安装目录借真实的 `assertSupportedJsonSchema` 校验器跑 schema，保证「过了测试 = 能过 loader」。`prepack` 钩子在打包前强制跑 manifest 测试（无 BOM、JSON 可解析、files 白名单文件真实存在）——防 "装完才发现坏" 的那类事故。

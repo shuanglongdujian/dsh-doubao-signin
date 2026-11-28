@@ -73,7 +73,7 @@ async function putBlob(rel) {
   return r.json.sha
 }
 
-const IDENTITY = { name: 'shuanglongdujian', email: '3315406431@qq.com' }
+const IDENTITY = { name: 'shuanglongdujian', email: '250778146+shuanglongdujian@users.noreply.github.com' }
 
 /**
  * 带时间戳的作者对象。

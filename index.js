@@ -42,6 +42,7 @@ import { directChat, buildDirectQuery } from './src/direct.js'
 import { findClientIdentity, toIdentity } from './src/identity.js'
 import { registerQuotaRoute } from './src/routes.js'
 import { createDoubaoAdapter, PROVIDER } from './src/doubao-adapter.js'
+import { createOpenAIGateway } from './src/openai-gateway.js'
 import {
   accountCookieHeader,
   addAccount,
@@ -81,6 +82,9 @@ export const DEFAULTS = {
   autoCheckinDelayMs: 30_000,
   /** 多账号池：凭据失效时自动换下一个账号。 */
   accountFailover: true,
+  openaiGatewayEnabled: false,
+  openaiGatewayPort: 8793,
+  openaiGatewayModelIds: [],
 }
 
 /** 聊天工具的参数 JSON Schema（隐式根对象，逐属性写 required）。 */
@@ -289,13 +293,41 @@ export async function apply(ctx, rawConfig = {}) {
   // —— LLM provider：让豆包模型出现在模型选择器 ——
   // 契约来自 dsh-llm registerAdapter：结构化校验，不需要 extends / pi-ai / 新依赖。
   // llm 服务由 inject=['tools','llm'] 保证就绪。
+  const adapter = createDoubaoAdapter({ config, getIdentity, cookieSource, ensureSigner, log })
   try {
-    const adapter = createDoubaoAdapter({ config, getIdentity, cookieSource, ensureSigner, log })
     const releaseAdapter = ctx.llm.registerAdapter([PROVIDER], adapter)
     ctx.effect(() => () => releaseAdapter(), 'doubao: llm adapter')
     log('LLM provider 已注册: ' + PROVIDER + '（' + Object.keys(MODELS).length + ' 个模型进入选择器）')
   } catch (error) {
     log('LLM provider 注册失败（工具仍可用）: ' + error.message)
+  }
+
+  if (config.openaiGatewayEnabled === true) {
+    ctx.effect(() => {
+      const port = config.openaiGatewayPort
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        log('OpenAI 网关未启动：openaiGatewayPort 必须是 1 到 65535 的整数。')
+        return
+      }
+      let server
+      try {
+        server = createOpenAIGateway({
+          key: process.env.DOUBAO_GATEWAY_KEY,
+          arkKey: process.env.ARK_API_KEY,
+          modelIds: config.openaiGatewayModelIds,
+          timeoutMs: config.timeoutMs,
+        })
+      } catch (error) {
+        log('OpenAI 网关未启动：' + error.message)
+        return
+      }
+      server.on('error', error => log('OpenAI 网关监听失败：' + (error.code ?? error.name)))
+      server.listen(port, '127.0.0.1', () => log(`OpenAI 网关监听于 http://127.0.0.1:${port}/v1`))
+      return () => {
+        server.close()
+        server.closeAllConnections()
+      }
+    }, 'doubao: OpenAI gateway')
   }
 
   // —— doubao_accounts：账号池管理（多账号 / 换号 / 看额度）——
