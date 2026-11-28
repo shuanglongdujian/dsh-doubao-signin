@@ -183,3 +183,20 @@ test('stream：未知模型回落到默认模型', async () => {
   await collect(adapter.stream({ model: 'not-a-model', messages: [] }))
   assert.ok(calls[0].body, '应仍然发出请求')
 })
+
+
+/* ===== 风控文案：不得混入「没会员」的错误推断 ===== */
+test('风控 710022004 不追加工作会员猜测，且有可行动指引', async () => {
+  // 工作模式模型 + 明确的风控错误码：只报风控，不能说「账号没开通会员」
+  const frame = 'data: {"error_code":710022004,"error_msg":"需要验证"}'
+  const { adapter } = makeAdapter(frame, { config: { includeWorkModels: true } })
+  await assert.rejects(
+    () => collect(adapter.stream({ model: 'doubao-auto', messages: [] })),
+    error => {
+      assert.ok(!/没开通|需要工作会员额度/.test(error.message), '风控时不应猜没会员')
+      assert.match(error.message, /710022004/)
+      assert.match(error.message, /人机验证|滑块|冷却/)
+      return true
+    },
+  )
+})

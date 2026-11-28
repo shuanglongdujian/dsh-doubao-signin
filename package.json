@@ -1,6 +1,6 @@
 {
   "name": "dsh-doubao-signin",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "description": "豆包（Doubao）网页端反代与每日签到：复用本机客户端的登录态，把 a_bogus 签名交给客户端自己算，模型侧提供 doubao_chat，签到侧提供 doubao_checkin。",
   "type": "module",
   "main": "./index.js",

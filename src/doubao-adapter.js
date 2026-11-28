@@ -225,12 +225,18 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
         let message = providerCode
           ? (UPSTREAM_ERROR_MESSAGES[providerCode] ?? '豆包上游返回错误码 ' + providerCode + '。')
           : classifyFailure(replyText).message
-        // 工作模式模型（agentMode=1）无会员额度时，豆包只回「出了点问题」，
-        // 明确告诉用户为什么，而不是甩一句笼统的通用失败。
-        if (MODELS[model]?.agentMode === 1) {
-          message += ' 这个模型属于「豆包工作」，需要工作会员额度；你的账号没开通时会这样返回。'
-          + ' 请在模型选择器里改选「豆包」或「豆包 专家」（对话面、免费），'
-          + '或到豆包 App 开通工作会员后再用（可在 cordis.patch.yml 开 includeWorkModels: true）。'
+        // 工作模式模型（agentMode=1）在**没有明确错误码、只回通用失败**时，
+        // 可能是没会员额度——给个提示。但注意：
+        // 1. 有明确错误码（尤其 710022004 风控）时**不要**追加会员猜测——会误导；
+        // 2. 实测账号有 has_active_subscription=true（免费体验会员），别再说"没开通"。
+        if (!providerCode && MODELS[model]?.agentMode === 1) {
+          message += ' 这是「豆包工作」模型，通用失败有时与工作权益有关；'
+          + '若你账号没开通工作权益，可改选「豆包」或「豆包 专家」（对话面）。'
+        }
+        // 风控给可行动指引（装了客户端就走页面中继，B 路线）
+        if (providerCode === '710022004') {
+          message += ' 请先到豆包网页端完成一次人机验证（滑块），或等冷却过去再试。'
+          + ' 已装豆包电脑版时，降级会用客户端页面 fetch 中继（会在豆包留下对话记录）。'
         }
         const code = 'DOUBAO_UPSTREAM_ERROR'
         const requestId = upstream.requestId
