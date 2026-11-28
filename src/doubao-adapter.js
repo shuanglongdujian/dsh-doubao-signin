@@ -145,13 +145,21 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
     async listModels(provider) {
       // LlmModelInfo: { provider, id, name, description?, inputModalities?, badge? }
       // name 是选择器里显示的模型名，description 是副标题——别把描述塞进 name。
-      return Object.entries(MODELS).map(([id, m]) => ({
-        provider,
-        id,
-        name: m.name ?? id,
-        ...(m.desc ? { description: m.desc } : {}),
-        inputModalities: ['text'],
-      }))
+      //
+      // 默认只注册**对话面**模型（agentMode !== 1）。工作模式模型（agentMode === 1，
+      // 如 doubao-auto / kimi-k3 / glm-5.3）需要豆包工作会员额度；普通账号选它们
+      // 只会得到「出了点问题，请稍后重试。」——列出来就是让人踩坑。
+      // 有会员额度的账号可在 cordis.patch.yml 里开 includeWorkModels: true。
+      const includeWork = config.includeWorkModels === true
+      return Object.entries(MODELS)
+        .filter(([, m]) => includeWork || m.agentMode !== 1)
+        .map(([id, m]) => ({
+          provider,
+          id,
+          name: m.name ?? id,
+          ...(m.desc ? { description: m.desc } : {}),
+          inputModalities: ['text'],
+        }))
     },
 
     async resolveModel(provider, model) {
@@ -214,9 +222,16 @@ export function createDoubaoAdapter({ config, getIdentity, cookieSource, ensureS
       const providerCode = events.map(event => upstreamErrorCode(event.raw)).find(Boolean)
       const replyText = events.filter(event => event.kind === 'text').map(event => event.text).join('')
       if (providerCode || isDoubaoFallbackReply(replyText)) {
-        const message = providerCode
+        let message = providerCode
           ? (UPSTREAM_ERROR_MESSAGES[providerCode] ?? '豆包上游返回错误码 ' + providerCode + '。')
           : classifyFailure(replyText).message
+        // 工作模式模型（agentMode=1）无会员额度时，豆包只回「出了点问题」，
+        // 明确告诉用户为什么，而不是甩一句笼统的通用失败。
+        if (MODELS[model]?.agentMode === 1) {
+          message += ' 这个模型属于「豆包工作」，需要工作会员额度；你的账号没开通时会这样返回。'
+          + ' 请在模型选择器里改选「豆包」或「豆包 专家」（对话面、免费），'
+          + '或到豆包 App 开通工作会员后再用（可在 cordis.patch.yml 开 includeWorkModels: true）。'
+        }
         const code = 'DOUBAO_UPSTREAM_ERROR'
         const requestId = upstream.requestId
         log('豆包调用失败（' + model + '）：' + message)

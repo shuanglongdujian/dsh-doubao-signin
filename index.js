@@ -83,6 +83,12 @@ export const DEFAULTS = {
   autoCheckinDelayMs: 30_000,
   /** 多账号池：凭据失效时自动换下一个账号。 */
   accountFailover: true,
+  /**
+   * 是否把「豆包工作」模式的模型（agentMode=1，如 doubao-auto / kimi-k3 / glm-5.3）
+   * 也注册进模型选择器。默认 false：这些模型需要工作会员额度，普通账号选了只会
+   * 得到「出了点问题」——列出来就是让人踩坑。有会员的账号可设为 true。
+   */
+  includeWorkModels: false,
   openaiGatewayEnabled: false,
   openaiGatewayPort: 8793,
   openaiGatewayModelIds: [],

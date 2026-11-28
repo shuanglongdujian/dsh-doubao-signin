@@ -189,7 +189,7 @@ test('Harness 将豆包上游的通用失败提示记录为失败，不显示成
   t.after(runtime.registerAdapter(['doubao'], adapter))
 
   const chunks = []
-  for await (const chunk of runtime.stream({ provider: 'doubao', model: 'doubao-auto', messages: [] })) {
+  for await (const chunk of runtime.stream({ provider: 'doubao', model: 'doubao', messages: [] })) {
     chunks.push(chunk)
   }
   assert.equal(chunks.some(chunk => chunk.type === 'text-delta'), false)

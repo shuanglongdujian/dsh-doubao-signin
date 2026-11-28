@@ -59,11 +59,21 @@ test('providerInfo 返回合法的 id/name', () => {
 test('listModels 非空且 provider 匹配（空数组会被选择器过滤）', async () => {
   const { adapter } = makeAdapter('')
   const models = await adapter.listModels('doubao')
-  assert.ok(models.length >= 5)
+  assert.ok(models.length >= 2)
   for (const m of models) {
     assert.equal(m.provider, 'doubao')
     assert.ok(m.id && m.name)
   }
+  // 默认只列对话面模型（免费可用），工作模式模型（需会员额度）默认隐藏
+  assert.ok(models.some(m => m.id === 'doubao'))
+  assert.ok(!models.some(m => m.id === 'doubao-auto'), '工作模式模型默认不该出现在选择器里')
+})
+
+test('includeWorkModels: true 时才注册工作模式模型', async () => {
+  const { adapter } = makeAdapter('', { config: { includeWorkModels: true } })
+  const models = await adapter.listModels('doubao')
+  assert.ok(models.some(m => m.id === 'doubao-auto'), '开启后应包含工作模式模型')
+  assert.ok(models.length >= 15)
 })
 
 test('resolveModel 给上下文窗口', async () => {
