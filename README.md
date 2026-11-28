@@ -173,6 +173,26 @@ doubao_accounts            # 看池子 + 每个账号的剩余额度
 
 服务端虽然会在 `SSE_ACK` 里回 `conversation_info`（`name: "新对话"`），但那个 id **不在会话列表里**、单独查也是 404——它不是一条真实记录，客户端只是本地显示了它。
 
+## 风控兜底：客户端页面 fetch 中继（B 路线）
+
+直连（A 路线）不落对话记录，但账号被风控（710022004）时过不去。这时插件会自动降级：
+
+1. 连豆包电脑版的 CDP 端口（默认 9222；`relaunchClient: true` 会自动带端口重启客户端）；
+2. 把这一轮请求交给**客户端页面自己的 fetch** 发——页面的 fetch 包装会自动加 a_bogus/msToken 签名；
+3. Node 只收 SSE 原文，解析后返回给 DSH。
+
+**为什么不是调 frontierSign**：实测客户端页面和网页里都没有 `window.byted_acrawler` / `frontierSign`，
+但 `window.fetch` 被包装过（`function(){return t(n,this,arguments,r)}`）——签名藏在包装内部，
+只有页面自己发 fetch 才会自动加。这正是 woc-jpg 的 bridge 与 Wahwayhale 的 browser-relay 的做法。
+
+**代价（必须知道）**：这是「客户端自己发一条消息」，**会在豆包客户端/手机同步里留下对话记录**。
+所以：
+
+- 想**不留记录**：用直连、别装客户端（A 路线）——健康账号正常，被风控时等冷却/过滑块；
+- 想**任何情况都能用**：装客户端走 B 路线——被风控时自动兜底，但会有记录。
+
+两条在豆包现有协议下互斥。插件默认先直连（不留记录），只在直连失败时降级到客户端中继。
+
 ## 本机 OpenAI 兼容接口（火山方舟）
 
 网关默认关闭。要启用，在本插件的 `cordis.patch.yml` 里找到 `dsh-doubao-signin` 项，

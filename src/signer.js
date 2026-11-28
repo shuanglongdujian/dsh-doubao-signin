@@ -1,22 +1,58 @@
 /**
- * a_bogus 签名与非流式请求执行，全部借本机豆包客户端的浏览器环境。
+ * 非流式聊天请求，借本机豆包**客户端页面自己的 fetch** 发出。
  *
- * 为什么不用 Playwright 自起 Chromium：
- * 1. 豆包桌面客户端本身就是 Electron，附带完整 Chromium 与已登录会话；
- * 2. `frontierSign` 是混淆过的 JS，每版都变，纯 JS 复刻必然持续腐烂；
- * 3. 我们再起一个浏览器 = 多一份风控面 + 多 300MB 内存 + 还要重新登录。
+ * ## 为什么是「页面 fetch 中继」而不是「调 frontierSign」
  *
- * 所以签名一律走 CDP 到客户端里已经登录的页面，把它当黑盒调用。
- * 结果缓存 120 秒（同一组 query 复用），跨请求共享。
+ * 实测（2026-11-28，客户端 2.37.18 + 网页版）：
+ * - `window.byted_acrawler` / `frontierSign` **在客户端页面和网页里都不存在**；
+ * - 但 `window.fetch` 被包装成 `function(){return t(n,this,arguments,r)}`——
+ *   签名（a_bogus / msToken）藏在包装内部，只有页面自己发 fetch 才会自动加。
+ *
+ * 所以正确做法（也是 woc-jpg 的 bridge、Wahwayhale 的 browser-relay 的做法）：
+ * 不自己造签名、不调签名函数，而是把 URL + body 交给页面，
+ * 让页面的 fetch 走它自己的完整链路（签名 + 指纹 + 会话），Node 只收 SSE 原文。
+ *
+ * 代价：这是「客户端自己发一条消息」，会在豆包客户端/手机同步里留对话记录。
+ * 这是用户明确选 B 路线时接受的成本。
+ *
+ * ## connect
+ *
+ * 连客户端的 CDP 调试端口（需要带 --remote-debugging-port 启动），
+ * 确认有已登录的 doubao.com 页面；没有就开一个。
  *
  * @module src/signer.js
  */
 import { CdpClient, ensurePort, findClient, listTargets } from './checkin.js'
 import { CHAT_PATH } from './protocol.js'
 import { QUOTA_PATH } from './quota.js'
+import { findClientIdentity, toIdentity } from './identity.js'
 
-/** 签名缓存时长。 */
+/** 签名缓存时长（保留导出，兼容旧调用方；页面中继不再用缓存）。 */
 export const SIGN_TTL_MS = 120_000
+
+/**
+ * 安全地读客户端身份（页面中继的 query 要带 device_id）。
+ * @returns {{found: boolean, identity?: object}} 身份。
+ */
+function getIdentitySafe() {
+  try {
+    const r = findClientIdentity({})
+    if (!r?.found) return { found: false }
+    const identity = toIdentity(r.info)
+    return identity ? { found: true, identity } : { found: false }
+  } catch {
+    return { found: false }
+  }
+}
+
+/**
+ * 从 signal 推 CDP 超时；无 signal 时用 3 分钟。
+ * @param {AbortSignal} [signal] - 取消信号。
+ * @returns {number} 毫秒。
+ */
+function configTimeout(signal) {
+  return 180_000
+}
 
 /** 会话页地址。 */
 const CHAT_PAGE = 'https://www.doubao.com/chat/'
@@ -80,8 +116,16 @@ export class ClientSigner {
     this.conn = new CdpClient(page.webSocketDebuggerUrl)
     await this.conn.connect()
 
-    // frontierSign 是页面脚本注入的，等它挂到 window 上
-    await this.waitForSignerFunction()
+    // 页面 fetch 中继不需要 frontierSign（客户端页面里根本不存在）。
+    // 只需确认页面已登录（不是登录墙）——签名由 fetch 包装自动完成。
+    const ready = await this.conn
+      .evaluate(`(() => {
+        const txt = document.body ? document.body.innerText : '';
+        const loggedOut = /^登录$/.test(txt.trim()) || (txt.length < 200 && txt.includes('登录'));
+        return !loggedOut;
+      })()`)
+      .catch(() => true)
+    if (!ready) throw new Error('客户端豆包页面处于未登录状态，先登录客户端再试。')
   }
 
   /**
@@ -176,33 +220,76 @@ export class ClientSigner {
   }
 
   /**
-   * 发一次带签名的非流式聊天请求。
+   * 发一次聊天请求：**让客户端页面自己的 fetch 发**（签名由页面包装自动加）。
+   *
+   * 这是 B 路线的核心——不自己造 a_bogus、不调不存在的 frontierSign，
+   * 而是把 URL + body 交给页面，用它的 fetch 走完整链路。
+   * 代价：会在豆包客户端/手机同步里留下对话记录（用户已确认接受）。
+   *
    * @param {object} body - 请求体。
    * @param {AbortSignal} [signal] - 取消信号。
    * @returns {Promise<string>} 上游 SSE 原文。
    */
   async postChat(body, signal) {
-    const query = `aid=497858&device_platform=web&pc_version=3.45.5&_t=${Date.now()}`
-    const signed = await this.sign(query)
-    const url = `https://www.doubao.com${CHAT_PATH}?${query}&a_bogus=${encodeURIComponent(signed.aBogus)}`
+    if (!this.conn) await this.connect()
+    const probe = getIdentitySafe()
+    const identity = probe?.identity
 
-    const headers = {
-      'content-type': 'application/json',
-      'user-agent': UA,
-      accept: 'text/event-stream, application/json;q=0.9, */*;q=0.8',
-      'accept-language': 'zh-CN,zh;q=0.9',
-      origin: 'https://www.doubao.com',
-      referer: 'https://www.doubao.com/chat/',
-      cookie: await this.cookieHeader(),
-    }
-    if (signed.msToken) headers['x-ms-token'] = signed.msToken
+    // query：用客户端 device_id + 配套参数；页面的 fetch 包装会自动加 a_bogus/msToken
+    const params = new URLSearchParams({
+      aid: '497858',
+      version_code: '20800',
+      language: 'zh',
+      device_platform: 'web',
+      doubao_device_platform: 'web',
+      real_aid: '497858',
+      pkg_type: 'release_version',
+      pc_version: identity?.clientVersion ?? '3.47.1',
+      doubao_pc_version: identity?.clientVersion ?? '3.47.1',
+      region: 'CN',
+      sys_region: 'CN',
+      samantha_web: '1',
+      'use-olympus-account': '1',
+      device_id: identity?.deviceId ?? '',
+      fp: identity?.fp ?? '',
+      web_id: identity?.webId ?? identity?.deviceId ?? '',
+      tea_uuid: identity?.deviceId ?? '',
+      web_platform: 'desktop',
+      web_tab_id: String(Date.now()),
+    })
+    const url = `${CHAT_PATH}?${params.toString()}`
 
-    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal })
-    if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`上游 HTTP ${res.status}: ${text.slice(0, 300)}`)
+    // 让页面发 fetch 并把响应正文读回来（awaitPromise 等它完成）
+    const expr = `(async () => {
+      try {
+        const res = await fetch(${JSON.stringify(url)}, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'accept': 'text/event-stream, application/json;q=0.9, */*;q=0.8' },
+          body: ${JSON.stringify(JSON.stringify(body))},
+        });
+        const text = await res.text();
+        return JSON.stringify({ ok: true, status: res.status, text });
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: String(e && e.message || e) });
+      }
+    })()`
+
+    // 取消信号：abort 时抛错（CDP 的 evaluateAsync 会自己超时兜底）
+    const onAbort = () => { throw new Error('调用方取消') }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    let raw
+    try {
+      raw = await this.conn.evaluateAsync(expr, configTimeout(signal))
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
     }
-    return res.text()
+    signal?.throwIfAborted()
+    const parsed = JSON.parse(raw)
+    if (!parsed.ok) throw new Error(`客户端页面 fetch 失败: ${parsed.error}`)
+    if (parsed.status !== 200) {
+      throw new Error(`上游 HTTP ${parsed.status}: ${String(parsed.text).slice(0, 300)}`)
+    }
+    return parsed.text
   }
 
   /**

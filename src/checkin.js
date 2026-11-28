@@ -275,6 +275,24 @@ export class CdpClient {
     }
     return r.result?.value
   }
+
+  /**
+   * 在页面里求值并等待 Promise 完成（用于页面 fetch 中继）。
+   * @param {string} expression - 返回 Promise 的表达式。
+   * @param {number} [timeoutMs] - 超时（聊天可达数分钟）。
+   * @returns {Promise<unknown>} Promise 解析后的值。
+   */
+  async evaluateAsync(expression, timeoutMs = 180_000) {
+    const r = await this.call('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    }, timeoutMs)
+    if (r.exceptionDetails) {
+      throw new Error(`页面脚本异常: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? 'unknown'}`)
+    }
+    return r.result?.value
+  }
 }
 
 /**
